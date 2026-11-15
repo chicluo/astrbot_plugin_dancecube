@@ -335,6 +335,17 @@ class MusicLib:
             out.extend(self._search(self.load_user(), text))
         except Exception:  # noqa: BLE001
             pass
+        # 同名同来源只保留点赞最高的一条（官谱没有点赞，保留第一个）
+        best = {}
+        order = []
+        for r in out:
+            key = ((r.get("name") or "").lower(), r.get("source"))
+            if key not in best:
+                best[key] = r
+                order.append(key)
+            elif (r.get("like") or 0) > (best[key].get("like") or 0):
+                best[key] = r
+        out = [best[k] for k in order]
         return self._attach_duration([self.enrich_user(r) for r in out[:limit]])
 
     def find_in_question(self, question):
