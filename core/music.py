@@ -13,6 +13,8 @@
 """
 import glob
 import json
+
+import mutagen
 import os
 import re
 import ssl
@@ -193,8 +195,6 @@ def _probe_audio(url):
                 if not chunk:
                     break
                 f.write(chunk)
-        import mutagen
-
         m = mutagen.File(path)
         if m is not None and getattr(m, "info", None):
             return round(float(m.info.length), 1)
