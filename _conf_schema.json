@@ -1,0 +1,36 @@
+{
+  "owner_qq": {
+    "description": "机器人主人 QQ",
+    "type": "string",
+    "default": "",
+    "hint": "主人不受群白名单限制，可在任何会话使用全部指令。"
+  },
+  "allowed_groups": {
+    "description": "允许使用舞立方功能的群号列表",
+    "type": "list",
+    "default": [],
+    "hint": "把群号填进来即可放开该群；好友私聊不受此限制。群号可在群里发 /sid 查看。"
+  },
+  "allow_private": {
+    "description": "允许好友私聊使用",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后，只有 allowed_groups 里的群聊可以使用。"
+  },
+  "qr_timeout_seconds": {
+    "description": "登录二维码有效期（秒）",
+    "type": "int",
+    "default": 120,
+    "slider": {
+      "min": 30,
+      "max": 300,
+      "step": 10
+    }
+  },
+  "export_dir": {
+    "description": "成绩 xlsx 导出目录（管理员本机路径）",
+    "type": "string",
+    "default": "",
+    "hint": "「/导出成绩」会把全部成绩表写到这里；机器人只提示路径，文件需联系管理员获取。"
+  }
+}

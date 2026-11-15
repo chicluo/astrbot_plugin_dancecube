@@ -1,0 +1,505 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+舞立方战力分析图 —— 本地生成（Pillow 绘制，无需浏览器渲染）
+
+用法：
+  python dc_image.py                  # B15
+  python dc_image.py --mode both      # B15 + R15 合并（上下双表）
+  python dc_image.py --mode b30
+  python dc_image.py --mode ap30
+  python dc_image.py --mode both --out out/ratio.png
+"""
+import argparse
+import io
+import os
+import ssl
+import sys
+import urllib.request
+from datetime import datetime
+
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+from .client import Player, load_token  # noqa: E402
+
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+
+FONT_DIR = "C:/Windows/Fonts"
+F_BOLD = os.path.join(FONT_DIR, "msyhbd.ttc")
+F_REG = os.path.join(FONT_DIR, "msyh.ttc")
+F_LIGHT = os.path.join(FONT_DIR, "msyhl.ttc")
+
+# 配色
+C_BG_TOP = (10, 14, 22)
+C_BG_BOT = (18, 25, 40)
+C_ACCENT = (79, 227, 193)
+C_ACCENT2 = (123, 140, 255)
+C_TEXT = (232, 237, 247)
+C_MUTED = (138, 148, 168)
+C_DIM = (95, 104, 124)
+
+W = 1080
+M = 44
+
+_font_cache = {}
+
+
+# 难度档位配色：初/中/高三色；show+ 与「秀专属谱」各一色
+DIFF_COLORS = {
+    "[初]": (110, 200, 230),
+    "[中]": (123, 140, 255),
+    "[高]": (255, 165, 110),
+    "[秀]": (200, 160, 120),
+}
+DIFF_SHOW = (198, 140, 255)
+
+
+def font(path, size):
+    key = (path, size)
+    if key not in _font_cache:
+        _font_cache[key] = ImageFont.truetype(path, size, index=0)
+    return _font_cache[key]
+
+
+def rounded(draw, box, radius, fill):
+    draw.rounded_rectangle(box, radius=radius, fill=fill)
+
+
+def text(draw, xy, s, f=None, fill=C_TEXT, anchor="la", font=None):
+    if font is None:
+        font = f
+    draw.text(xy, s, font=font, fill=fill, anchor=anchor)
+
+
+def fmt_int(n):
+    try:
+        return "{:,}".format(int(n))
+    except Exception:
+        return str(n)
+
+
+# ---------------------------------------------------------------- 背景 / 头像
+def gradient_bg(w, h):
+    img = Image.new("RGB", (w, h), C_BG_TOP)
+    d = ImageDraw.Draw(img)
+    for y in range(h):
+        t = y / max(1, h - 1)
+        d.line([(0, y), (w, y)], fill=(
+            int(C_BG_TOP[0] + (C_BG_BOT[0] - C_BG_TOP[0]) * t),
+            int(C_BG_TOP[1] + (C_BG_BOT[1] - C_BG_TOP[1]) * t),
+            int(C_BG_TOP[2] + (C_BG_BOT[2] - C_BG_TOP[2]) * t)))
+    glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse((-220, -260, 420, 380), fill=(79, 227, 193, 26))
+    gd.ellipse((w - 380, 120, w + 260, 760), fill=(123, 140, 255, 24))
+    gd.ellipse((w - 200, h - 420, w + 320, h + 120), fill=(79, 227, 193, 16))
+    glow = glow.filter(ImageFilter.GaussianBlur(120))
+    return Image.alpha_composite(img.convert("RGBA"), glow).convert("RGB")
+
+
+def load_avatar(url, size):
+    if not url:
+        return None
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as r:
+            data = r.read()
+        im = Image.open(io.BytesIO(data)).convert("RGBA")
+        w, h = im.size
+        s = min(w, h)
+        im = im.crop(((w - s) // 2, (h - s) // 2, (w - s) // 2 + s, (h - s) // 2 + s))
+        big = im.resize((size * 3, size * 3), Image.LANCZOS)
+        mask = Image.new("L", (size * 3, size * 3), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, size * 3, size * 3), fill=255)
+        big.putalpha(mask)
+        return big.resize((size, size), Image.LANCZOS)
+    except Exception:
+        return None
+
+
+def avatar_fallback(size, name):
+    im = Image.new("RGBA", (size * 3, size * 3), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.ellipse((0, 0, size * 3, size * 3), fill=(46, 60, 92, 255))
+    d.text((size * 3 // 2, size * 3 // 2), (name or "?")[:1],
+           font=font(F_BOLD, int(size * 1.25)), fill=(200, 215, 240), anchor="mm")
+    return im.resize((size, size), Image.LANCZOS)
+
+
+# ---------------------------------------------------------------- 通用区块
+def draw_header(img, d, info):
+    av_size = 96
+    av = load_avatar(info.get("HeadimgURL"), av_size) or avatar_fallback(
+        av_size, info.get("UserName"))
+    pos = (M, 44)
+    d.ellipse((pos[0] - 4, pos[1] - 4, pos[0] + av_size + 4, pos[1] + av_size + 4),
+              outline=(79, 227, 193, 110), width=2)
+    img.paste(av, pos, av)
+
+    tx = pos[0] + av_size + 22
+    text(d, (tx, 50), info.get("UserName") or ("舞立方 " + str(info.get("UserID"))),
+         font(F_BOLD, 42))
+    meta = ["ID " + fmt_int(info.get("UserID"))]
+    if info.get("CityName"):
+        meta.append(info["CityName"])
+    if info.get("TeamName"):
+        meta.append("战队 " + info["TeamName"])
+    text(d, (tx, 104), " · ".join(meta), font(F_LIGHT, 21), fill=C_MUTED)
+
+    ratio = int(info.get("LvRatio") or 0)
+    text(d, (W - M, 44), str(ratio), font(F_BOLD, 82), fill=C_ACCENT, anchor="ra")
+    text(d, (W - M, 136), "LVRATIO", font(F_REG, 17), fill=C_DIM, anchor="ra")
+
+
+def draw_stats(d, y, stats):
+    sh = 84
+    cw = (W - 2 * M - 4 * 12) // 5
+    for i, (label, value) in enumerate(stats):
+        x0 = M + i * (cw + 12)
+        rounded(d, (x0, y, x0 + cw, y + sh), 14, (255, 255, 255, 14))
+        text(d, (x0 + 14, y + 12), label, font(F_LIGHT, 17), fill=C_DIM)
+        text(d, (x0 + 14, y + 36), str(value), font(F_BOLD, 27), fill=C_TEXT)
+    return y + sh
+
+
+def _fonts_for(row_h):
+    if row_h >= 46:
+        return (font(F_REG, 23), font(F_BOLD, 24), font(F_REG, 18),
+                font(F_BOLD, 17), font(F_LIGHT, 17), font(F_BOLD, 22))
+    if row_h >= 38:
+        return (font(F_REG, 21), font(F_BOLD, 22), font(F_REG, 18),
+                font(F_BOLD, 16), font(F_LIGHT, 16), font(F_BOLD, 20))
+    return (font(F_REG, 19), font(F_BOLD, 19), font(F_REG, 16),
+            font(F_BOLD, 15), font(F_LIGHT, 15), font(F_BOLD, 18))
+
+
+def draw_song_table(d, songs, top, row_h, y0):
+    """成绩表：序号 / 曲名 / 定数 / 难度 / ACC / 评级 / 战力条 / 战力"""
+    if not songs:
+        text(d, (W // 2, y0 + 80), "暂无符合条件的成绩", font(F_REG, 24), fill=C_MUTED, anchor="mm")
+        return
+    row_f, num_f, acc_f, lv_f, diff_f, rat_f = _fonts_for(row_h)
+    top = max(1, top)
+    for i, s in enumerate(songs, 1):
+        cy = y0 + (i - 1) * row_h
+        mid = cy + row_h // 2 - 1
+
+        text(d, (M + 24, mid), "%02d" % i, font=num_f,
+             fill=C_DIM if i > 3 else C_ACCENT, anchor="lm")
+
+        name = s["name"] or ""
+        maxw = 205
+        if d.textlength(name, font=row_f) > maxw:
+            while name and d.textlength(name + "…", font=row_f) > maxw:
+                name = name[:-1]
+            name += "…"
+        # 自制谱用单独的颜色标出
+        name_fill = DIFF_SHOW if s.get("ownerType") == 2 else C_TEXT
+        text(d, (M + 72, mid), name, font=row_f, fill=name_fill, anchor="lm")
+
+        lx = M + 290
+        rounded(d, (lx, mid - 12, lx + 46, mid + 12), 8, (79, 227, 193, 38))
+        text(d, (lx + 23, mid), "Lv%d" % s["level"], font=lv_f, fill=C_ACCENT, anchor="mm")
+
+        diff_name = s["levelTypeName"] or "-"
+        if diff_name.startswith("[S]"):
+            dcol = DIFF_SHOW
+        else:
+            dcol = next(
+                (v for k, v in DIFF_COLORS.items() if diff_name.startswith(k)), C_MUTED
+            )
+        dtx = M + 354
+        if diff_name.startswith(("[初]", "[中]", "[高]", "[S]", "[秀]")):
+            # 经典三档 / show+ 做成彩色小标签
+            dw = d.textlength(diff_name, font=diff_f)
+            rounded(d, (dtx - 7, mid - 12, dtx + dw + 7, mid + 12), 7, dcol + (30,))
+            text(d, (dtx, mid), diff_name, font=diff_f, fill=dcol, anchor="lm")
+        else:
+            text(d, (dtx, mid), diff_name, font=diff_f, fill=dcol, anchor="lm")
+
+        text(d, (M + 470, mid), "%.2f%%" % s["acc"], font=acc_f, fill=C_TEXT, anchor="lm")
+
+        if s["grade"]:
+            gx = M + 572
+            rounded(d, (gx, mid - 11, gx + 40, mid + 11), 7, (123, 140, 255, 45))
+            text(d, (gx + 20, mid), s["grade"], font=font(F_BOLD, 15), fill=C_ACCENT2, anchor="mm")
+
+        bx, bw, bh = M + 628, 248, 8
+        by = mid - bh // 2 + 1
+        rounded(d, (bx, by, bx + bw, by + bh), 4, (255, 255, 255, 20))
+        fw = max(bh, int(bw * s["rating"] / top))
+        rounded(d, (bx, by, bx + fw, by + bh), 4, C_ACCENT)
+
+        text(d, (W - M - 24, mid), str(s["rating"]), font=rat_f, fill=C_ACCENT, anchor="rm")
+
+
+def draw_section(d, y, title, sub, songs, row_h, top):
+    """一张卡片：标题 + 副标题 + 表格，返回卡片底部 y"""
+    h = 66 + len(songs) * row_h + 14
+    rounded(d, (M, y, W - M, y + h), 20, (255, 255, 255, 16))
+    text(d, (M + 22, y + 18), title, font(F_BOLD, 27))
+    text(d, (W - M - 22, y + 24), sub, font(F_LIGHT, 18), fill=C_DIM, anchor="ra")
+    draw_song_table(d, songs, top, row_h, y + 66)
+    return y + h
+
+
+def draw_history(d, y, h, hist):
+    rounded(d, (M, y, W - M, y + h), 20, (255, 255, 255, 16))
+    text(d, (M + 22, y + 16), "战力变化", font(F_BOLD, 25))
+    if not hist:
+        text(d, (W // 2, y + h // 2), "暂无历史战力", font(F_REG, 22), fill=C_MUTED, anchor="mm")
+        return y + h
+
+    by_day = {}
+    for r in hist:
+        by_day[r["LogTime"][:10]] = int(r["LvRatio"])
+    days = sorted(by_day)
+    vals = [by_day[x] for x in days]
+
+    text(d, (W - M - 22, y + 22), "%s → %s · 当前 %d · %d 次变动" % (
+        days[0][5:], days[-1][5:], vals[-1], len(hist)),
+        font(F_LIGHT, 17), fill=C_DIM, anchor="ra")
+
+    cx0, cy0 = M + 34, y + 62
+    cw2, ch2 = W - 2 * M - 68, h - 104
+    lo, hi = min(vals), max(vals)
+    pad = max(8, (hi - lo) * 0.15)
+    lo_p, hi_p = lo - pad, hi + pad
+
+    def px(i):
+        return cx0 + (cw2 * i / max(1, len(vals) - 1))
+
+    def py(v):
+        return cy0 + ch2 - (v - lo_p) / max(1e-6, hi_p - lo_p) * ch2
+
+    for k in range(4):
+        gy = cy0 + ch2 * k / 3
+        d.line((cx0, gy, cx0 + cw2, gy), fill=(255, 255, 255, 12), width=1)
+
+    pts = [(px(i), py(v)) for i, v in enumerate(vals)]
+    d.polygon(pts + [(cx0 + cw2, cy0 + ch2), (cx0, cy0 + ch2)], fill=(79, 227, 193, 26))
+    d.line(pts, fill=C_ACCENT, width=3, joint="curve")
+    for i in (0, len(vals) - 1):
+        x, yy = pts[i]
+        d.ellipse((x - 5, yy - 5, x + 5, yy + 5), fill=C_ACCENT)
+    mi = vals.index(max(vals))
+    x, yy = pts[mi]
+    d.ellipse((x - 4, yy - 4, x + 4, yy + 4), fill=C_ACCENT2)
+    text(d, (x, yy - 14), "峰值 %d" % max(vals), font(F_BOLD, 16), fill=C_ACCENT2, anchor="mb")
+
+    text(d, (cx0, cy0 + ch2 + 10), days[0][5:], font(F_LIGHT, 15), fill=C_DIM, anchor="la")
+    text(d, (cx0 + cw2, cy0 + ch2 + 10), days[-1][5:], font(F_LIGHT, 15), fill=C_DIM, anchor="ra")
+    return y + h
+
+
+# ---------------------------------------------------------------- 主构建
+def draw_acc_dist(d, y, h, played):
+    """ACC 区间分布：一眼看出还有多少首歌能往上推。"""
+    rounded(d, (M, y, W - M, y + h), 20, (255, 255, 255, 16))
+    text(d, (M + 22, y + 16), "ACC 分布", font(F_BOLD, 25))
+    text(d, (W - M - 22, y + 22), "已游玩的 %d 个谱面" % len(played),
+         font(F_LIGHT, 17), fill=C_DIM, anchor="ra")
+
+    bins = [
+        ("AP 100%", lambda a: a >= 99.995, C_ACCENT2),
+        ("98 - 100", lambda a: 98 <= a < 99.995, C_ACCENT),
+        ("95 - 98", lambda a: 95 <= a < 98, (110, 200, 230)),
+        ("90 - 95", lambda a: 90 <= a < 95, (120, 160, 230)),
+        ("85 - 90", lambda a: 85 <= a < 90, (140, 140, 190)),
+        ("< 85", lambda a: a < 85, (120, 120, 140)),
+    ]
+    counts = [sum(1 for s in played if fn(s["acc"])) for _, fn, _ in bins]
+    mx = max(counts + [1])
+    by = y + 60
+    bw = 560
+    for (label, _, col), n in zip(bins, counts):
+        mid = by + 16
+        text(d, (M + 34, mid), label, font(F_LIGHT, 19), fill=C_MUTED, anchor="lm")
+        rounded(d, (M + 140, mid - 7, M + 140 + bw, mid + 7), 7, (255, 255, 255, 16))
+        if n > 0:
+            fw = max(9, int(bw * n / mx))
+            rounded(d, (M + 140, mid - 7, M + 140 + fw, mid + 7), 7, col)
+        text(d, (M + 140 + bw + 18, mid), "%d 首" % n, font=font(F_BOLD, 19), fill=C_TEXT, anchor="lm")
+        by += 32
+
+
+def build_level(player, lv=12, show_n=30):
+    """单定数成绩清单：曲库全集 × 我的成绩。"""
+    info = player.info()
+    charts = player.charts_at_level(lv)
+    scores = player.scores()
+    idx = {(str(r["musicId"]), r["levelType"]): r for r in scores}
+
+    played = []
+    for c in charts:
+        r = idx.get((c["musicId"], c["levelType"]))
+        if r:
+            played.append(dict(c, acc=r["acc"], score=r["score"], miss=r["miss"],
+                               rating=r["rating"], grade=r["grade"], time=r["time"]))
+    played.sort(key=lambda x: -x["rating"])
+    n_unplayed = len(charts) - len(played)
+    accs = [s["acc"] for s in played]
+    avg_acc = sum(accs) / len(accs) if accs else 0
+    avg_rat = sum(s["rating"] for s in played) / len(played) if played else 0
+    fc = sum(1 for s in played if s["grade"] == "FC")
+    ap = sum(1 for s in played if s["grade"] == "AP")
+    show = played[:show_n]
+
+    row_h = 34
+    card_h = 66 + len(show) * row_h + 14
+    dist_h = 60 + 6 * 32 + 12
+    H = 300 + card_h + 24 + dist_h + 64
+
+    img = gradient_bg(W, H)
+    ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(ov)
+
+    draw_header(img, d, info)
+    draw_stats(d, 196, [
+        ("曲库谱面", len(charts)),
+        ("已游玩", len(played)),
+        ("平均 ACC", "%.2f%%" % avg_acc),
+        ("平均战力", "%.0f" % avg_rat),
+        ("FC / AP", "%d / %d" % (fc, ap)),
+    ])
+
+    top = max([s["rating"] for s in show] + [1])
+    sub = "已游玩 %d / %d · 未游玩 %d 个待推分" % (len(played), len(charts), n_unplayed)
+    draw_section(d, 300, "定数 %d · 战力前 %d" % (lv, len(show)), sub, show, row_h, top)
+
+    dist_y = 300 + card_h + 24
+    draw_acc_dist(d, dist_y, dist_h, played)
+
+    text(d, (W // 2, H - 32), "数据来源：舞立方官方接口 · 本地生成 %s" %
+         datetime.now().strftime("%Y-%m-%d %H:%M"), font(F_LIGHT, 16), fill=C_DIM, anchor="mm")
+    return Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
+
+
+def build(player, mode="b15", lv=12):
+    info = player.info()
+    acc = player.account() or {}
+    items = {i.get("ReplyTextItemID"): i.get("Content")
+             for i in (player.stats_items() or []) if isinstance(i, dict)}
+    hist = player.history() or []
+
+    if mode == "level":
+        return build_level(player, lv)
+
+    if mode == "both":
+        b15 = player.best(15)
+        r15 = player.recent_songs(15)
+        top = max([s["rating"] for s in b15 + r15] + [1])
+        row_h = 42
+        b15_avg = sum(s["rating"] for s in b15) / len(b15) if b15 else 0
+        r15_avg = sum(s["rating"] for s in r15) / len(r15) if r15 else 0
+        sections = [
+            ("B15 战力分析", "最佳 15 首 · 仅官谱 · 合计 %d · 平均 %.1f" % (
+                sum(s["rating"] for s in b15), b15_avg), b15),
+            ("R15 最近游玩", "最近 15 局 · 01 为最新 · 合计 %d · 平均 %.1f" % (
+                sum(s["rating"] for s in r15), r15_avg), r15),
+        ]
+        title_mode = "both"
+    elif mode == "b15":
+        songs = player.best(15)
+        top = max([s["rating"] for s in songs] + [1])
+        row_h = 46
+        total = sum(s["rating"] for s in songs)
+        sections = [("B15 战力分析",
+                     "最佳 15 首 · 仅官谱 · 共 %d 首" % len(songs), songs)]
+        title_mode = "b15"
+    elif mode == "b30":
+        songs = player.best(30)
+        top = max([s["rating"] for s in songs] + [1])
+        row_h = 34
+        sections = [("B30 战力分析",
+                     "战力前 30 首 · 仅官谱 · 共 %d 首" % len(songs), songs)]
+        title_mode = "b30"
+    else:
+        songs = player.ap(30)
+        top = max([s["rating"] for s in songs] + [1])
+        row_h = 46
+        sections = [("AP30 满分成绩",
+                     "ALL PERFECT · 前 30 首 · 共 %d 首" % len(songs), songs)]
+        title_mode = "ap30"
+
+    # 版面计算
+    y = 300
+    blocks = []
+    for title, sub, songs in sections:
+        blocks.append((title, sub, songs, row_h))
+        y += 66 + len(songs) * row_h + 14 + (20 if mode == "both" else 0)
+    hist_y = y + 4
+    hist_h = 286
+    H = hist_y + hist_h + 64
+
+    img = gradient_bg(W, H)
+    ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(ov)
+
+    draw_header(img, d, info)
+    draw_stats(d, 196, [
+        ("积分", fmt_int(info.get("MusicScore"))),
+        ("全国排名", fmt_int(info.get("RankNation"))),
+        ("全连率", "%.2f%%" % (float(info.get("ComboPercent") or 0) / 100)),
+        ("游玩次数", items.get(5) or "-"),
+        ("金币", fmt_int(acc.get("Gold"))),
+    ])
+
+    yy = 300
+    for title, sub, songs, rh in blocks:
+        draw_section(d, yy, title, sub, songs, rh, top)
+        yy += 66 + len(songs) * rh + 14 + (20 if mode == "both" else 0)
+
+    draw_history(d, hist_y, hist_h, hist)
+
+    if mode == "both":
+        foot = "数据来源：舞立方官方接口 · 本地生成 %s" % \
+               datetime.now().strftime("%Y-%m-%d %H:%M")
+    else:
+        total = sum(s["rating"] for s in sections[0][2])
+        avg = total / len(sections[0][2]) if sections[0][2] else 0
+        foot = "合计 %d · 平均 %.1f   |   数据来源：舞立方官方接口 · 本地生成 %s" % (
+            total, avg, datetime.now().strftime("%Y-%m-%d %H:%M"))
+    text(d, (W // 2, H - 32), foot, font(F_LIGHT, 16), fill=C_DIM, anchor="mm")
+
+    return Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="生成舞立方战力分析图")
+    ap.add_argument("--mode", default="b15", choices=["b15", "b30", "ap30", "both", "level"])
+    ap.add_argument("--lv", type=int, default=12, help="mode=level 时的定数（1-20）")
+    ap.add_argument("--out", default="")
+    args = ap.parse_args()
+
+    tok = load_token()
+    player = Player(tok)
+    print("[i] %s (%s)" % (player.info().get("UserName"), player.uid))
+
+    img = build(player, args.mode, args.lv)
+    if args.mode == "both":
+        fname = "ratio_b15r15.png"
+    elif args.mode == "level":
+        fname = "level%d.png" % args.lv
+    else:
+        fname = "ratio_%s.png" % args.mode
+    out = args.out or os.path.join(HERE, "out", fname)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    img.save(out, "PNG")
+    print("[ok] %s  %dx%d  %d KB" % (out, img.width, img.height, os.path.getsize(out) // 1024))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*.log
+*.xlsx
+.env
+token.json
+tokens/
+data/

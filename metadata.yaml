@@ -1,0 +1,6 @@
+name: astrbot_plugin_dancecube
+desc: 舞立方（Dance Cube）查询：扫码登录、个人信息、B15+R15 / B30 / AP30 战力分析图
+author: local
+version: 0.1.0
+support_platforms:
+  - aiocqhttp
