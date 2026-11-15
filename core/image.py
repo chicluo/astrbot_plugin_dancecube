@@ -33,10 +33,44 @@ from .client import Player, load_token  # noqa: E402
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
-FONT_DIR = "C:/Windows/Fonts"
-F_BOLD = os.path.join(FONT_DIR, "msyhbd.ttc")
-F_REG = os.path.join(FONT_DIR, "msyh.ttc")
-F_LIGHT = os.path.join(FONT_DIR, "msyhl.ttc")
+_FONT_CANDIDATES = {
+    "bold": [
+        "C:/Windows/Fonts/msyhbd.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+    ],
+    "reg": [
+        "C:/Windows/Fonts/msyh.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+    ],
+    "light": [
+        "C:/Windows/Fonts/msyhl.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Light.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Light.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+    ],
+}
+
+
+def _pick_font(paths):
+    for p in paths:
+        try:
+            if os.path.exists(p):
+                return p
+        except OSError:
+            continue
+    return None
+
+
+F_BOLD = _pick_font(_FONT_CANDIDATES["bold"])
+F_REG = _pick_font(_FONT_CANDIDATES["reg"])
+F_LIGHT = _pick_font(_FONT_CANDIDATES["light"])
 
 # 配色
 C_BG_TOP = (10, 14, 22)
@@ -66,7 +100,13 @@ DIFF_SHOW = (198, 140, 255)
 def font(path, size):
     key = (path, size)
     if key not in _font_cache:
-        _font_cache[key] = ImageFont.truetype(path, size, index=0)
+        if not path:
+            _font_cache[key] = ImageFont.load_default(size)
+        else:
+            try:
+                _font_cache[key] = ImageFont.truetype(path, size, index=0)
+            except (OSError, TypeError, ValueError):
+                _font_cache[key] = ImageFont.load_default(size)
     return _font_cache[key]
 
 

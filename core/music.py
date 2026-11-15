@@ -53,6 +53,8 @@ def _find_token(plugin_data_dir):
 
 
 def _api(path, token, params=None):
+    if not token:
+        raise RuntimeError("曲库尚未初始化，请先让任意用户执行 /舞立方登录")
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE

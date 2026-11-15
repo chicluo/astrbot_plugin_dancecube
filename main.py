@@ -41,6 +41,7 @@ class DanceCube(star.Star):
         self.tokens_dir.mkdir(parents=True, exist_ok=True)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         self._pending: dict[str, asyncio.Task] = {}
+        self._last_call: dict[str, float] = {}
 
     # ------------------------------------------------------------ 基础工具
     def _allowed(self, event: AstrMessageEvent) -> bool:
@@ -99,9 +100,21 @@ class DanceCube(star.Star):
             except OSError:
                 pass
 
+    def _cooldown_wait(self, qq: str, seconds: int = 30) -> int:
+        """同一用户短时间内的重复请求拦截，返回需要等待的秒数（0 表示放行）。"""
+        now = time.time()
+        last = self._last_call.get(qq, 0.0)
+        if now - last < seconds:
+            return max(1, int(seconds - (now - last)))
+        self._last_call[qq] = now
+        return 0
+
     async def _player(self, event: AstrMessageEvent):
         """取当前用户 Player；返回 (player, 错误信息)。"""
         qq = str(event.get_sender_id())
+        wait = self._cooldown_wait(qq)
+        if wait:
+            return None, f"操作太频繁，请 {wait} 秒后再试。"
         tok = self._load_token(qq)
         if not tok:
             return None, "你还没有登录舞立方。\n请先发送 /舞立方登录 扫码。"
@@ -123,6 +136,8 @@ class DanceCube(star.Star):
             img = await asyncio.to_thread(dc_image.build, player, mode)
         out = self._tmp_path(mode, qq)
         await asyncio.to_thread(img.save, str(out), "PNG")
+        # 每次出图顺手清掉旧临时文件，避免长期运行堆积
+        await asyncio.to_thread(self._clean_tmp)
         return out
 
     # ------------------------------------------------------------ 登录
