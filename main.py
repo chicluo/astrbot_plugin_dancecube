@@ -345,7 +345,7 @@ class DanceCube(star.Star):
         if len(hits) == 1:
             yield event.plain_result(lib.format(hits[0]))
             return
-        show = hits[:5]
+        show = hits[:10]
         lines = []
         for h in show:
             tag = "自制谱" if h.get("source") == "user" else "官谱"
