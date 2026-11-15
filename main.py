@@ -335,7 +335,7 @@ class DanceCube(star.Star):
             return
         try:
             lib = self._music_lib()
-            hits = await asyncio.to_thread(lib.find, name, 5)
+            hits = await asyncio.to_thread(lib.find, name, 50)
         except Exception as e:  # noqa: BLE001
             yield event.plain_result("曲库查询失败：%s" % e)
             return
@@ -345,12 +345,14 @@ class DanceCube(star.Star):
         if len(hits) == 1:
             yield event.plain_result(lib.format(hits[0]))
             return
+        show = hits[:5]
         lines = []
-        for h in hits[:5]:
+        for h in show:
             tag = "自制谱" if h.get("source") == "user" else "官谱"
             lines.append("%s（%s · ID %s）" % (h.get("name") or "?", tag, h.get("musicId")))
+        head = "共 %d 首，显示前 %d：" % (len(hits), len(show))
         yield event.plain_result(
-            "找到 %d 首：\n%s\n\n用 /曲目 <ID> 精确查询。" % (len(hits), "\n".join(lines))
+            "%s\n%s\n\n用 /曲目 <ID> 精确查询。" % (head, "\n".join(lines))
         )
 
     def _ensure_music_cache(self):
