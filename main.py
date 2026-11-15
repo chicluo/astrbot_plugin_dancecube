@@ -350,7 +350,11 @@ class DanceCube(star.Star):
         for h in show:
             tag = "自制谱" if h.get("source") == "user" else "官谱"
             lines.append("%s（%s · ID %s）" % (h.get("name") or "?", tag, h.get("musicId")))
-        head = "共 %d 首，显示前 %d：" % (len(hits), len(show))
+        raw = getattr(lib, "last_raw_total", len(hits))
+        if raw != len(hits):
+            head = "共 %d 首（去重后 %d 首），显示前 %d：" % (raw, len(hits), len(show))
+        else:
+            head = "共 %d 首，显示前 %d：" % (raw, len(show))
         yield event.plain_result(
             "%s\n%s\n\n用 /曲目 <ID> 精确查询。" % (head, "\n".join(lines))
         )
