@@ -28,6 +28,8 @@ UA = (
 OFFICIAL_TTL = 24 * 3600
 USER_TTL = 6 * 3600
 
+HIDDEN_SONG_IDS = {"3461", "672", "833", "4023", "4024", "4025", "6873", "6874", "6875"}
+
 SHOW_TYPE = {101: "基础", 102: "进阶", 103: "专家", 104: "大师", 105: "传奇"}
 CLASSIC_TIER = {0: "初级", 1: "中级", 2: "高级"}
 CLASSIC_RAW = {11: "基础", 12: "进阶", 13: "专家", 14: "大师", 15: "传奇"}
@@ -328,9 +330,8 @@ class MusicLib:
             out.extend(self._search(self.load_official(), text))
         except Exception:  # noqa: BLE001
             pass
-        if out:
-            return out[:limit]
         try:
+            # 官谱和自制谱都查：同名时两条都返回，让用户自己挑
             out.extend(self._search(self.load_user(), text))
         except Exception:  # noqa: BLE001
             pass
@@ -434,7 +435,9 @@ class MusicLib:
             else:
                 lines.append("  时长 %s" % label)
         elif record.get("source") == "official":
-            lines.append("  时长：商店隐藏歌曲，无法拉取")
+            # 只有这几首是商店隐藏曲（未购买前无音频），其余官谱缺时长就是数据没有
+            if str(record.get("musicId")) in HIDDEN_SONG_IDS:
+                lines.append("  时长：商店隐藏歌曲，无法拉取")
         owner_id = record.get("ownerId")
         owner_name = record.get("ownerName")
         if owner_id or owner_name:

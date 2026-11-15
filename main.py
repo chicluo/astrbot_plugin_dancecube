@@ -13,6 +13,7 @@
 """
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 
@@ -310,7 +311,25 @@ class DanceCube(star.Star):
         """查曲目：音乐ID / 各难度定数 / 物量 / 时长 / 比特率。"""
         if not self._allowed(event):
             return
-        name = (name or "").strip()
+        # 规范化空白：QQ 里可能带全角空格或不间断空格
+        # AstrBot 的 name: str 只拿第一个空格前的 token，这里用完整消息文本补全
+        full = (event.get_message_str() or "").strip()
+        for prefix in ("/", "／"):
+            if full.startswith(prefix):
+                full = full[len(prefix):]
+                break
+        for cmd in ("曲目", "查歌", "song", "音乐"):
+            if full.startswith(cmd):
+                full = full[len(cmd):].strip()
+                break
+        if full:
+            name = full
+        raw_name = name
+        name = re.sub(r"[\s\u3000\u00a0]+", " ", (name or "")).strip()
+        try:
+            self.logger.info("曲目查询参数: raw=%r normalized=%r", raw_name, name)
+        except Exception:  # noqa: BLE001
+            pass
         if not name:
             yield event.plain_result("用法：/曲目 <曲名或ID>\n例如：/曲目 Calavera")
             return
@@ -323,12 +342,16 @@ class DanceCube(star.Star):
         if not hits:
             yield event.plain_result("曲库里没有找到含\u300c%s\u300d的曲子。" % name)
             return
-        exact = [h for h in hits if (h.get("name") or "").lower() == name.lower()]
-        if not exact and len(hits) > 1:
-            names = "、".join(h.get("name") or "?" for h in hits)
-            yield event.plain_result("找到多首相关曲目：%s\n请把曲名写完整。" % names)
+        if len(hits) == 1:
+            yield event.plain_result(lib.format(hits[0]))
             return
-        yield event.plain_result(lib.format((exact or hits)[0]))
+        lines = []
+        for h in hits[:5]:
+            tag = "自制谱" if h.get("source") == "user" else "官谱"
+            lines.append("%s（%s · ID %s）" % (h.get("name") or "?", tag, h.get("musicId")))
+        yield event.plain_result(
+            "找到 %d 首：\n%s\n\n用 /曲目 <ID> 精确查询。" % (len(hits), "\n".join(lines))
+        )
 
     def _ensure_music_cache(self):
         """首次部署时把插件自带的曲库快照复制到 plugin_data，省一次全量拉取。"""
