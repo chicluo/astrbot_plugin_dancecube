@@ -282,6 +282,43 @@ class DanceCube(star.Star):
         if result is not None:
             yield result
 
+    @filter.command("曲目", alias={"查歌", "song", "音乐"})
+    async def dc_song(self, event: AstrMessageEvent, name: str = ""):
+        """查曲目：音乐ID / 各难度定数 / 物量 / 时长 / 比特率。"""
+        if not self._allowed(event):
+            return
+        name = (name or "").strip()
+        if not name:
+            yield event.plain_result("用法：/曲目 <曲名或ID>\n例如：/曲目 Calavera")
+            return
+        try:
+            lib = self._music_lib()
+            hits = await asyncio.to_thread(lib.find, name, 5)
+        except Exception as e:  # noqa: BLE001
+            yield event.plain_result("曲库查询失败：%s" % e)
+            return
+        if not hits:
+            yield event.plain_result("曲库里没有找到含\u300c%s\u300d的曲子。" % name)
+            return
+        exact = [h for h in hits if (h.get("name") or "").lower() == name.lower()]
+        if not exact and len(hits) > 1:
+            names = "、".join(h.get("name") or "?" for h in hits)
+            yield event.plain_result("找到多首相关曲目：%s\n请把曲名写完整。" % names)
+            return
+        yield event.plain_result(lib.format((exact or hits)[0]))
+
+    def _music_lib(self):
+        if getattr(self, "_mlib", None) is None:
+            import os as _os
+            from .core import music as music_lib_mod
+
+            base = get_astrbot_plugin_data_path()
+            self._mlib = music_lib_mod.MusicLib(
+                _os.path.join(base, "astrbot_plugin_dancecube", "music", "music_library.json"),
+                base,
+            )
+        return self._mlib
+
     @filter.command("导出成绩", alias={"dcxlsx", "成绩导出"})
     async def dc_xlsx(self, event: AstrMessageEvent):
         """把该用户全部成绩导出为 xlsx；优先直接发文件，失败再提示联系管理员。"""
