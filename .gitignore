@@ -1,10 +1,11 @@
-﻿__pycache__/
+__pycache__/
 *.py[cod]
 *.log
 *.xlsx
 .env
 token.json
 tokens/
-data/
+# 只排除凭证，保留曲库快照（data/*.json 要提交）
+data/tokens/
 
 core/out/

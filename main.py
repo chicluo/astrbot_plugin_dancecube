@@ -329,11 +329,30 @@ class DanceCube(star.Star):
             return
         yield event.plain_result(lib.format((exact or hits)[0]))
 
+    def _ensure_music_cache(self):
+        """首次部署时把插件自带的曲库快照复制到 plugin_data，省一次全量拉取。"""
+        import shutil
+        from pathlib import Path
+
+        bundled = Path(__file__).resolve().parent / "data"
+        dest = Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_dancecube" / "music"
+        if not bundled.is_dir():
+            return
+        try:
+            dest.mkdir(parents=True, exist_ok=True)
+            for src in bundled.glob("*.json"):
+                target = dest / src.name
+                if not target.exists():
+                    shutil.copy2(src, target)
+        except OSError:
+            pass
+
     def _music_lib(self):
         if getattr(self, "_mlib", None) is None:
             import os as _os
             from .core import music as music_lib_mod
 
+            self._ensure_music_cache()
             base = get_astrbot_plugin_data_path()
             self._mlib = music_lib_mod.MusicLib(
                 _os.path.join(base, "astrbot_plugin_dancecube", "music", "music_library.json"),
