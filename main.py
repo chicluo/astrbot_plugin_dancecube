@@ -344,7 +344,7 @@ class DanceCube(star.Star):
             for src in bundled.glob("*.json"):
                 target = dest / src.name
                 if not target.exists():
-                    shutil.copy2(src, target)
+                    shutil.copy(src, target)  # 用 copy 不用 copy2：让 mtime 变成此刻，避免一复制就被判过期
         except OSError:
             pass
 
