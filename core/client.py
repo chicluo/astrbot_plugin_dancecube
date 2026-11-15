@@ -106,10 +106,10 @@ LADDER = ["未定级", "一星", "二星", "三星", "星钻", "表神", "里神
 def load_token():
     path = os.path.join(HERE, "token.json")
     if not os.path.exists(path):
-        raise SystemExit("没有 token.json，请先运行：python dc_login.py qr && python dc_login.py poll")
+        raise ValueError("没有 token.json，请先运行：python dc_login.py qr && python dc_login.py poll")
     tok = json.load(open(path, encoding="utf-8"))
     if not tok.get("access_token"):
-        raise SystemExit("token.json 里没有 access_token")
+        raise ValueError("token.json 里没有 access_token")
     return tok
 
 
@@ -193,7 +193,7 @@ class Player:
         self.tok = tok
         self.uid = str(tok.get("userId") or "")
         if not self.uid:
-            raise SystemExit("token.json 里没有 userId")
+            raise ValueError("token.json 里没有 userId")
         self.api = Api(tok["access_token"], self.uid)
         self._scores = None
         self._lib_index = None

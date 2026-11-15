@@ -37,19 +37,26 @@ def _tier_short(tier):
     return {"初级": "初", "中级": "中", "高级": "高"}.get(tier, "")
 
 
-def _find_token(plugin_data_dir):
+def _load_tokens(plugin_data_dir):
+    """返回所有可用 token，按文件排序。"""
     pattern = os.path.join(
         plugin_data_dir, "astrbot_plugin_dancecube", "tokens", "*.json"
     )
+    out = []
     for path in sorted(glob.glob(pattern)):
         try:
             with open(path, encoding="utf-8") as f:
                 tok = json.load(f)
             if tok.get("access_token"):
-                return tok["access_token"]
+                out.append(tok["access_token"])
         except (OSError, ValueError):
             continue
-    return None
+    return out
+
+
+def _find_token(plugin_data_dir):
+    tokens = _load_tokens(plugin_data_dir)
+    return tokens[0] if tokens else None
 
 
 def _api(path, token, params=None):
@@ -180,7 +187,8 @@ class MusicLib:
         merged = {}
         for name in ("music_duration.json", "music_duration_user.json"):
             try:
-                merged.update(json.load(open(_os.path.join(base, name), encoding="utf-8")))
+                with open(_os.path.join(base, name), encoding="utf-8") as f:
+                    merged.update(json.load(f))
             except (OSError, ValueError):
                 continue
         self._duration = merged
@@ -194,7 +202,8 @@ class MusicLib:
 
         p = _os.path.join(_os.path.dirname(str(self.cache_path)), "music_bitrate.json")
         try:
-            self._size = json.load(open(p, encoding="utf-8"))
+            with open(p, encoding="utf-8") as f:
+                self._size = json.load(f)
         except (OSError, ValueError):
             self._size = {}
         return self._size
@@ -211,6 +220,20 @@ class MusicLib:
                 r["kbps"] = round(b * 8 / d / 1000)
         return records
 
+    def _fetch(self, path, params=None):
+        """依次尝试所有已登录用户 token，避免单个凭证失效就把曲库查死。"""
+        tokens = _load_tokens(self.plugin_data_dir)
+        if not tokens:
+            raise RuntimeError("曲库尚未初始化，请先让任意用户执行 /舞立方登录")
+        last_err = None
+        for tok in tokens:
+            try:
+                return _api(path, tok, params)
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                continue
+        raise last_err if last_err else RuntimeError("曲库请求失败")
+
     # ---------------------------------------------------------- 官谱
     def load_official(self):
         if self._official is not None:
@@ -223,10 +246,7 @@ class MusicLib:
                 return self._official
             except (OSError, ValueError):
                 pass
-        token = _find_token(self.plugin_data_dir)
-        if not token:
-            raise RuntimeError("还没有人登录过舞立方，先让主人发 /舞立方登录")
-        songs = _api("/Dance/MusicData/GetValidMusicList", token)
+        songs = self._fetch("/Dance/MusicData/GetValidMusicList")
         if not isinstance(songs, list):
             raise RuntimeError("官谱接口返回异常")
         self._official = [_norm_official(x) for x in songs]
@@ -251,14 +271,10 @@ class MusicLib:
                     return self._user
                 except (OSError, ValueError):
                     pass
-        token = _find_token(self.plugin_data_dir)
-        if not token:
-            raise RuntimeError("还没有人登录过舞立方，先让主人发 /舞立方登录")
         items, page = [], 1
         while page <= 20:
-            d = _api(
+            d = self._fetch(
                 "/Dance/api/Goods/GetGoodsMusic",
-                token,
                 {"page": page, "pagesize": 1000, "orderby": 3, "ordertype": 2},
             )
             lst = (d or {}).get("List") or []
@@ -359,11 +375,8 @@ class MusicLib:
             return record
         if not record.get("hasShow"):
             return record
-        token = _find_token(self.plugin_data_dir)
-        if not token:
-            return record
         try:
-            d = _api("/Dance/api/MusicData/GetGoodsInfo", token, {"musicId": mid})
+            d = self._fetch("/Dance/api/MusicData/GetGoodsInfo", {"musicId": mid})
         except Exception:  # noqa: BLE001
             return record
 
