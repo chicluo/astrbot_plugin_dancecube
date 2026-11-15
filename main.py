@@ -343,7 +343,8 @@ class DanceCube(star.Star):
             yield event.plain_result("曲库里没有找到含\u300c%s\u300d的曲子。" % name)
             return
         if len(hits) == 1:
-            yield event.plain_result(lib.format(hits[0]))
+            record = await asyncio.to_thread(lib.probe_duration, hits[0])
+            yield event.plain_result(lib.format(record))
             return
         show = hits[:10]
         lines = []

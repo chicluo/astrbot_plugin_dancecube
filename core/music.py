@@ -168,7 +168,44 @@ def _norm_user(item):
         "tags": item.get("TagList") or [],
         "hasShow": bool(item.get("HasShow")),
         "intro": item.get("GoodsIntro") or "",
+        "audioUrl": item.get("AudioUrl") or "",
     }
+
+
+def _probe_audio(url):
+    """下载音频读一次时长（按需兜底，约 1 秒）。"""
+    import tempfile
+
+    fd, path = tempfile.mkstemp(suffix=".bin")
+    os.close(fd)
+    try:
+        parts = urllib.parse.urlsplit(url)
+        enc = urllib.parse.urlunsplit(
+            (parts.scheme, parts.netloc, urllib.parse.quote(parts.path, safe="/%+"), parts.query, parts.fragment)
+        )
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(enc, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=60, context=ctx) as r, open(path, "wb") as f:
+            while True:
+                chunk = r.read(1 << 16)
+                if not chunk:
+                    break
+                f.write(chunk)
+        import mutagen
+
+        m = mutagen.File(path)
+        if m is not None and getattr(m, "info", None):
+            return round(float(m.info.length), 1)
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return None
 
 
 class MusicLib:
@@ -209,6 +246,45 @@ class MusicLib:
         except (OSError, ValueError):
             self._size = {}
         return self._size
+
+    def probe_duration(self, record):
+        """缺时长时现拉音频算一次，并写回缓存。"""
+        if record.get("duration"):
+            return record
+        mid = str(record.get("musicId") or "")
+        if not mid:
+            return record
+        url = record.get("audioUrl") or ""
+        if not url:
+            try:
+                d = self._fetch("/Dance/api/MusicData/GetGoodsInfo", {"musicId": mid})
+                for it in d.get("ListFile") or []:
+                    if int(it.get("FileType") or 0) == 2 and it.get("Url"):
+                        url = it["Url"]
+                        break
+            except Exception:  # noqa: BLE001
+                return record
+        if not url:
+            return record
+        dur = _probe_audio(url)
+        if not dur:
+            return record
+        record["duration"] = dur
+        try:
+            import json as _json
+
+            p = os.path.join(os.path.dirname(str(self.cache_path)), "music_duration_user.json")
+            data = {}
+            if os.path.exists(p):
+                with open(p, encoding="utf-8") as f:
+                    data = _json.load(f)
+            data[mid] = dur
+            with open(p, "w", encoding="utf-8") as f:
+                _json.dump(data, f, ensure_ascii=False)
+            self._duration = None  # 下次重新加载
+        except (OSError, ValueError):
+            pass
+        return record
 
     def _attach_duration(self, records):
         dur = self.load_duration()
