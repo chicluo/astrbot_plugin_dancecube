@@ -61,6 +61,9 @@ class DanceCube(star.Star):
             if "*" in groups:
                 return True  # 所有群放行
             return str(event.get_group_id() or "") in groups
+        # 其它消息类型（官方机器人偶发的 OTHER_MESSAGE）按私聊处理
+        if message_type == MessageType.OTHER_MESSAGE:
+            return bool(self.config.get("allow_private", True))
         return False
 
     def _token_path(self, qq: str) -> Path:
@@ -171,6 +174,10 @@ class DanceCube(star.Star):
             return
 
         qq = str(event.get_sender_id())
+        wait = self._cooldown_wait(qq, seconds=10)
+        if wait:
+            yield event.plain_result(f"登录操作太频繁，请 {wait} 秒后再试。")
+            return
         running = self._pending.get(qq)
         if running and not running.done():
             yield event.plain_result("你已有一次登录流程正在进行中，请先扫码或等待二维码过期。")

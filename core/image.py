@@ -12,6 +12,7 @@
 """
 import argparse
 import io
+import logging
 import os
 import ssl
 import sys
@@ -97,15 +98,32 @@ DIFF_COLORS = {
 DIFF_SHOW = (198, 140, 255)
 
 
+_font_warned = False
+
+
+def _warn_missing_font():
+    global _font_warned
+    if _font_warned:
+        return
+    _font_warned = True
+    logging.warning(
+        "[dancecube] 没有找到中文字体，图里的中文会显示成方块。"
+        " Linux 请安装 fonts-wqy-zenhei 或 fonts-noto-cjk；"
+        " 也可以在插件目录放一份 NotoSansSC-Regular.otf。"
+    )
+
+
 def font(path, size):
     key = (path, size)
     if key not in _font_cache:
         if not path:
+            _warn_missing_font()
             _font_cache[key] = ImageFont.load_default(size)
         else:
             try:
                 _font_cache[key] = ImageFont.truetype(path, size, index=0)
             except (OSError, TypeError, ValueError):
+                _warn_missing_font()
                 _font_cache[key] = ImageFont.load_default(size)
     return _font_cache[key]
 
