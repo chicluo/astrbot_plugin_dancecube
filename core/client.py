@@ -81,7 +81,7 @@ def difficulty_name(lev_new, old_lev):
         label = SHOW_TYPE.get(lev_new, "")
         if label.startswith("show+-"):
             label = label[len("show+-") :]
-        return "[S]" + (label or str(lev_new))
+        return "[S+]" + (label or str(lev_new))
     try:
         old = int(old_lev)
     except (TypeError, ValueError):

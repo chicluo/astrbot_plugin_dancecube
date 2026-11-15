@@ -214,14 +214,14 @@ def draw_song_table(d, songs, top, row_h, y0):
         text(d, (lx + 23, mid), "Lv%d" % s["level"], font=lv_f, fill=C_ACCENT, anchor="mm")
 
         diff_name = s["levelTypeName"] or "-"
-        if diff_name.startswith("[S]"):
+        if diff_name.startswith("[S+]"):
             dcol = DIFF_SHOW
         else:
             dcol = next(
                 (v for k, v in DIFF_COLORS.items() if diff_name.startswith(k)), C_MUTED
             )
         dtx = M + 354
-        if diff_name.startswith(("[初]", "[中]", "[高]", "[S]", "[秀]")):
+        if diff_name.startswith(("[初]", "[中]", "[高]", "[S+]", "[秀]")):
             # 经典三档 / show+ 做成彩色小标签
             dw = d.textlength(diff_name, font=diff_f)
             rounded(d, (dtx - 7, mid - 12, dtx + dw + 7, mid + 12), 7, dcol + (30,))
