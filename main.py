@@ -42,6 +42,7 @@ class DanceCube(star.Star):
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         self._pending: dict[str, asyncio.Task] = {}
         self._last_call: dict[str, float] = {}
+        self._ensure_music_cache()
 
     # ------------------------------------------------------------ 基础工具
     def _allowed(self, event: AstrMessageEvent) -> bool:
