@@ -154,6 +154,8 @@ def _norm_official(song):
         "ownerId": None,
         "ownerName": "",
         "tags": [],
+        # 曲风：1 国语 / 3 韩文 / 4 欧美 / 6 其他
+        "categoryNew": song.get("MusicCategoryNew"),
     }
 
 

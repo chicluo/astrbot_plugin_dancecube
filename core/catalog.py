@@ -22,7 +22,13 @@ CENTER = Alignment(horizontal="center", vertical="center")
 LEFT = Alignment(horizontal="left", vertical="center")
 RIGHT = Alignment(horizontal="right", vertical="center")
 
-OFFICIAL_HEADERS = ["音乐ID", "曲名", "时长", "难度", "定数", "物量"]
+OFFICIAL_HEADERS = ["音乐ID", "曲名", "曲风", "时长", "难度", "定数", "物量"]
+
+# 曲风：MusicCategoryNew 1 国语 / 3 韩文 / 4 欧美 / 6 其他
+GENRE_NAMES = {1: "国语", 3: "韩文", 4: "欧美", 6: "其他"}
+
+# 官谱排序辅键：定数相同按 高 → 中 → 初 → 秀 → S+
+TAG_ORDER = {"[高]": 0, "[中]": 1, "[初]": 2, "[秀]": 3, "[S+]": 4}
 USER_HEADERS = [
     "音乐ID", "曲名", "时长", "作者ID", "作者", "标签", "价格(金币)", "点赞", "异常",
     "难度1", "定数1", "物量1", "难度2", "定数2", "物量2", "难度3", "定数3", "物量3",
@@ -41,6 +47,13 @@ def _disp_width(value):
     for ch in str(value):
         w += 2 if ord(ch) > 0x2E7F else 1
     return w
+
+
+def _int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def mmss(seconds):
@@ -84,19 +97,21 @@ def _finish(ws, headers, path):
 
 
 def build_official(lib, path):
-    """生成官谱全表，每个谱面一行。返回 (路径, 谱面行数, 曲目数)。"""
+    """生成官谱全表，每个谱面一行。
+
+    排序：定数倒序为主，同定数按 高 → 中 → 初 → 秀 → S+ 为辅，再按音乐 ID。
+    返回 (路径, 谱面行数, 曲目数)。
+    """
     songs = lib._attach_duration(list(lib.load_official()))
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "官谱全表"
-    ws.append(OFFICIAL_HEADERS)
+    rows = []
     for r in songs:
         mid = r.get("musicId")
         name = r.get("name") or ""
+        genre = GENRE_NAMES.get(_int(r.get("categoryNew")), "其他")
         dur = mmss(r.get("duration"))
         levels = r.get("levels") or []
         if not levels:
-            ws.append([mid, name, dur, "未填", "", ""])
+            rows.append([mid, name, genre, dur, "未填", "", "", 0, 9, _int(mid)])
             continue
         for lv in levels:
             if lv.get("level") is not None and lv["level"] < 0 and not lv.get("isShow"):
@@ -104,16 +119,32 @@ def build_official(lib, path):
             label = level_label(lv)
             if lv.get("isBad"):
                 label = "⚠️ " + label
-            ws.append([
+            clean = label.replace("⚠️ ", "")
+            tag_rank = next((v for k, v in TAG_ORDER.items() if clean.startswith(k)), 9)
+            level = lv.get("level")
+            level_num = level if isinstance(level, int) and level > 0 else 0
+            rows.append([
                 mid,
                 name,
+                genre,
                 dur,
                 label,
-                lv.get("level") if lv.get("level") is not None else "",
+                level if level is not None else "",
                 lv.get("combo") or "",
+                level_num,
+                tag_rank,
+                _int(mid),
             ])
+    rows.sort(key=lambda x: (-x[7], x[8], x[9]))
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "官谱全表"
+    ws.append(OFFICIAL_HEADERS)
+    for row in rows:
+        ws.append(row[:7])
     _finish(ws, OFFICIAL_HEADERS, path)
-    return path, max(0, ws.max_row - 1), len(songs)
+    return path, len(rows), len(songs)
 
 
 def build_user(lib, path):
