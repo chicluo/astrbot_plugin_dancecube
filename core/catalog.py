@@ -117,8 +117,10 @@ def build_official(lib, path):
 
 
 def build_user(lib, path):
-    """生成自制谱全表，每个商品一行。返回 (路径, 行数)。"""
+    """生成自制谱全表，每个商品一行，按点赞倒序。返回 (路径, 行数)。"""
     items = lib._attach_duration(list(lib.load_user()))
+    # 点赞倒序；同赞按音乐 ID 升序，保证每次生成顺序稳定
+    items.sort(key=lambda r: (-int(r.get("like") or 0), int(r.get("musicId") or 0)))
     wb = Workbook()
     ws = wb.active
     ws.title = "自制谱商店"
