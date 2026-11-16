@@ -64,6 +64,7 @@ def build_info(player):
             ("全连率", "%.2f%%" % (float(info.get("ComboPercent") or 0) / 100)),
             ("全国排名", fmt_int(info.get("RankNation"))),
             ("金币", fmt_int(acc.get("Gold"))),
+            # ReplyTextItemID=5 是官方「游玩次数」的固定项，接口只给 ID + 数值
             ("游玩次数", items.get(5) or "-"),
         ],
     )

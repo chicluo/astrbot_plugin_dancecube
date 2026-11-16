@@ -118,6 +118,12 @@ class DanceCube(star.Star):
             self.logger.warning(
                 "[dancecube] allowed_groups 含 *，所有群都能使用登录入口，请确认这是本意"
             )
+        if _as_bool(config.get("login_admin_only"), False) and not str(
+            config.get("owner_qq") or ""
+        ).strip():
+            self.logger.warning(
+                "[dancecube] login_admin_only=true 但 owner_qq 为空，所有人都会被拒绝登录"
+            )
 
     # ------------------------------------------------------------ 基础工具
     def _platform(self, event: AstrMessageEvent) -> str:
@@ -180,9 +186,10 @@ class DanceCube(star.Star):
 
     def _save_token(self, qq: str, tok: dict) -> None:
         path = self._token_path(qq)
-        path.write_text(
-            json.dumps(tok, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        tmp = path.with_suffix(".json.tmp")
+        # 原子写：崩溃时旧文件仍完整，不会留下半截 JSON
+        tmp.write_text(json.dumps(tok, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
         try:
             os.chmod(path, 0o600)  # 只有运行账号能读
         except OSError:
@@ -289,7 +296,12 @@ class DanceCube(star.Star):
         qq = str(event.get_sender_id())
         if _as_bool(self.config.get("login_admin_only"), False):
             owner = str(self.config.get("owner_qq") or "").strip()
-            if not owner or qq != owner:
+            if not owner:
+                yield event.plain_result(
+                    "管理员开了「仅管理员可登录」却没配 owner_qq，现在谁都登不了；请联系管理员补配置。"
+                )
+                return
+            if qq != owner:
                 yield event.plain_result("管理员开启了「仅管理员可登录」，请联系管理员。")
                 return
         wait = self._cooldown_wait(qq, seconds=10, kind="login")

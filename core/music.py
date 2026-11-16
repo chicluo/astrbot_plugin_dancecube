@@ -469,6 +469,8 @@ class MusicLib:
             d = self._fetch("/Dance/api/MusicData/GetGoodsInfo", {"musicId": mid})
         except Exception:  # noqa: BLE001
             return record
+        if not isinstance(d, dict):  # 接口异常时可能返回 list，别 .get 崩掉这次查询
+            return record
 
         levels = list(record.get("levels") or [])
         have_show = any(lv.get("isShow") for lv in levels)

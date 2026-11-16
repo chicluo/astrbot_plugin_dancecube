@@ -521,6 +521,7 @@ def build(player, mode="b15", lv=12):
         ("积分", fmt_int(info.get("MusicScore"))),
         ("全国排名", fmt_int(info.get("RankNation"))),
         ("全连率", "%.2f%%" % (float(info.get("ComboPercent") or 0) / 100)),
+        # ReplyTextItemID=5 是官方「游玩次数」的固定项，接口只给 ID + 数值，只能按约定取
         ("游玩次数", items.get(5) or "-"),
         ("金币", fmt_int(acc.get("Gold"))),
     ])
