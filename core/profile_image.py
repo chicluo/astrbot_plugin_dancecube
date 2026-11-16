@@ -2,8 +2,6 @@
 
 复用 dc_image 的配色与绘制工具，输出与战力分析图同一风格。
 """
-from datetime import datetime
-
 from PIL import Image, ImageDraw
 
 from .image import (
@@ -15,6 +13,7 @@ from .image import (
     draw_stats,
     fmt_int,
     font,
+    footer,
     gradient_bg,
     text,
 )
@@ -89,8 +88,7 @@ def build_info(player):
     text(
         d,
         (W // 2, H - 32),
-        "数据来源：舞立方官方接口 · 本地生成 %s"
-        % datetime.now().strftime("%Y-%m-%d %H:%M"),
+        footer(),
         font(F_LIGHT, 16),
         fill=C_DIM,
         anchor="mm",

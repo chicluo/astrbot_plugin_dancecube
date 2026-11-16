@@ -85,7 +85,18 @@ C_DIM = (95, 104, 124)
 W = 1080
 M = 44
 
+PROJECT_URL = "https://github.com/chicluo/astrbot_plugin_dancecube"
+
 _font_cache = {}
+
+
+def footer(extra=""):
+    """图片底部统一文案：项目开源地址 + 本次生成时间。"""
+    base = "项目开源：%s；生成时间：%s" % (
+        PROJECT_URL,
+        datetime.now().strftime("%Y-%m-%d %H:%M"),
+    )
+    return ("%s   |   %s" % (extra, base)) if extra else base
 
 
 # 难度档位配色：初/中/高三色；show+ 与「秀专属谱」各一色
@@ -440,8 +451,7 @@ def build_level(player, lv=12, show_n=30):
     dist_y = 300 + card_h + 24
     draw_acc_dist(d, dist_y, dist_h, played)
 
-    text(d, (W // 2, H - 32), "数据来源：舞立方官方接口 · 本地生成 %s" %
-         datetime.now().strftime("%Y-%m-%d %H:%M"), font(F_LIGHT, 16), fill=C_DIM, anchor="mm")
+    text(d, (W // 2, H - 32), footer(), font(F_LIGHT, 16), fill=C_DIM, anchor="mm")
     return Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
 
 
@@ -523,13 +533,11 @@ def build(player, mode="b15", lv=12):
     draw_history(d, hist_y, hist_h, hist)
 
     if mode == "both":
-        foot = "数据来源：舞立方官方接口 · 本地生成 %s" % \
-               datetime.now().strftime("%Y-%m-%d %H:%M")
+        foot = footer()
     else:
         total = sum(s["rating"] for s in sections[0][2])
         avg = total / len(sections[0][2]) if sections[0][2] else 0
-        foot = "合计 %d · 平均 %.1f   |   数据来源：舞立方官方接口 · 本地生成 %s" % (
-            total, avg, datetime.now().strftime("%Y-%m-%d %H:%M"))
+        foot = footer("合计 %d · 平均 %.1f" % (total, avg))
     text(d, (W // 2, H - 32), foot, font(F_LIGHT, 16), fill=C_DIM, anchor="mm")
 
     return Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")

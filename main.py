@@ -23,6 +23,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
+from .core import catalog as dc_catalog
 from .core import image as dc_image
 from .core import login as dc_login
 from .core.client import Player
@@ -30,6 +31,31 @@ from .core.export import DEFAULT_EXPORT_DIR, export_scores
 from .core.profile_image import build_info
 
 PLUGIN_NAME = "astrbot_plugin_dancecube"
+
+# 「/曲目 官谱全表」「/曲目 自制谱全表」：直接出 xlsx，不按曲名搜
+CATALOG_KEYS = {
+    "官谱全表": "official",
+    "官谱表": "official",
+    "官谱表格": "official",
+    "自制谱全表": "user",
+    "自制谱表": "user",
+    "自制谱表格": "user",
+}
+
+
+def _file_send_hint(err):
+    """发送文件失败时，把常见原因翻成人话。"""
+    s = str(err)
+    low = s.lower()
+    if "too large" in low or "file_size" in low or "size limit" in low or "超过" in s:
+        return "文件超过接口大小限制（单文件硬上限 200MB）。"
+    if "429" in s or "rate" in low or "qps" in low or "频率" in s:
+        return "发送太频繁被限流，过几分钟再试。"
+    if "file_info" in low or "expired" in low:
+        return "上传凭证过期，重发一次指令即可。"
+    if "401" in s or "token" in low or "凭证" in s:
+        return "机器人平台凭证异常，请管理员检查配置。"
+    return "可能是网络波动或接口临时异常，稍后再试即可。"
 
 
 class DanceCube(star.Star):
@@ -331,7 +357,15 @@ class DanceCube(star.Star):
         except Exception:  # noqa: BLE001
             pass
         if not name:
-            yield event.plain_result("用法：/曲目 <曲名或ID>\n例如：/曲目 Calavera")
+            yield event.plain_result(
+                "用法：/曲目 <曲名或ID>\n例如：/曲目 Calavera\n"
+                "拉全表：/曲目 官谱全表 、/曲目 自制谱全表"
+            )
+            return
+        kind = CATALOG_KEYS.get(name)
+        if kind:
+            async for item in self._send_catalog(event, kind):
+                yield item
             return
         try:
             lib = self._music_lib()
@@ -359,6 +393,72 @@ class DanceCube(star.Star):
         yield event.plain_result(
             "%s\n%s\n\n用 /曲目 <ID> 精确查询。" % (head, "\n".join(lines))
         )
+
+    # ------------------------------------------------------------ 曲库全表
+    def _catalog_dir(self) -> Path:
+        d = self.tmp_dir / "catalog"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return d
+
+    def _catalog_ttl(self) -> int:
+        try:
+            minutes = int(self.config.get("catalog_ttl_minutes", 30) or 30)
+        except (TypeError, ValueError):
+            minutes = 30
+        return max(1, minutes) * 60
+
+    def _build_catalog(self, kind):
+        """生成全表文件，返回 (路径, 行数, 曲目数)。"""
+        lib = self._music_lib()
+        path = self._catalog_dir() / ("%s.xlsx" % kind)
+        if kind == "official":
+            _, rows, songs = dc_catalog.build_official(lib, str(path))
+            return path, rows, songs
+        _, rows = dc_catalog.build_user(lib, str(path))
+        return path, rows, None
+
+    async def _send_catalog(self, event: AstrMessageEvent, kind: str):
+        """出一份曲库全表：TTL 内直接重发上次生成的文件，避免反复拉库。"""
+        label = "官谱全表" if kind == "official" else "自制谱全表"
+        path = self._catalog_dir() / ("%s.xlsx" % kind)
+        age_sec = None
+        try:
+            if path.exists():
+                age_sec = time.time() - path.stat().st_mtime
+        except OSError:
+            age_sec = None
+
+        if age_sec is not None and age_sec < self._catalog_ttl():
+            yield event.plain_result(
+                "%s（%d 分钟前生成，直接复用）" % (label, int(age_sec // 60))
+            )
+        else:
+            yield event.plain_result("正在生成%s，请稍候…" % label)
+            try:
+                path, rows, songs = await asyncio.to_thread(self._build_catalog, kind)
+            except Exception as e:  # noqa: BLE001
+                yield event.plain_result("生成%s失败：%s" % (label, e))
+                return
+            extra = "，%d 首曲目" % songs if songs else ""
+            yield event.plain_result("%s已生成：%d 行%s" % (label, rows, extra))
+
+        shown = "%s_%s.xlsx" % (label, time.strftime("%Y%m%d"))
+        try:
+            await event.send(MessageChain([Comp.File(name=shown, file=str(path))]))
+        except Exception as e:  # noqa: BLE001
+            try:
+                self.logger.warning("%s发送失败：%s", label, e)
+            except Exception:  # noqa: BLE001
+                pass
+            yield event.plain_result(
+                "文件发送失败：%s\n详情：%s\n"
+                "官方接口不提供群文件容量查询，机器人发的文件也不占群文件空间，"
+                "所以群文件满不是这里的原因；反复失败请让管理员从本机取。"
+                % (_file_send_hint(e), e)
+            )
 
     def _ensure_music_cache(self):
         """首次部署时把插件自带的曲库快照复制到 plugin_data，省一次全量拉取。"""
