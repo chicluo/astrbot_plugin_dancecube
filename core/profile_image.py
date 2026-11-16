@@ -5,17 +5,13 @@
 from PIL import Image, ImageDraw
 
 from .image import (
-    C_DIM,
-    F_LIGHT,
     W,
+    draw_footer,
     draw_header,
     draw_history,
     draw_stats,
     fmt_int,
-    font,
-    footer,
     gradient_bg,
-    text,
 )
 
 LADDER_NAMES = ["未定级", "一星", "二星", "三星", "星钻", "表神", "里神"]
@@ -85,12 +81,5 @@ def build_info(player):
 
     draw_history(d, hist_y, hist_h, hist)
 
-    text(
-        d,
-        (W // 2, H - 32),
-        footer(),
-        font(F_LIGHT, 16),
-        fill=C_DIM,
-        anchor="mm",
-    )
+    draw_footer(d, H)
     return Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")

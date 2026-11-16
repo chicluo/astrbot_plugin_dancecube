@@ -86,17 +86,26 @@ W = 1080
 M = 44
 
 PROJECT_URL = "https://github.com/chicluo/astrbot_plugin_dancecube"
+QQ_GROUP = "566567000"
 
 _font_cache = {}
 
 
-def footer(extra=""):
-    """图片底部统一文案：项目开源地址 + 本次生成时间。"""
-    base = "项目开源：%s；生成时间：%s" % (
-        PROJECT_URL,
-        datetime.now().strftime("%Y-%m-%d %H:%M"),
-    )
-    return ("%s   |   %s" % (extra, base)) if extra else base
+def footer_lines(extra=""):
+    """底部两行文案：项目开源 + 生成时间 / 体验群。"""
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    first = "项目开源：%s；生成时间：%s" % (PROJECT_URL, stamp)
+    if extra:
+        first = "%s   |   %s" % (extra, first)
+    return [first, "体验QQ群：%s" % QQ_GROUP]
+
+
+def draw_footer(d, height, extra=""):
+    """在图片底部居中画两行文案，整体上移留出第二行空间。"""
+    lines = footer_lines(extra)
+    top = height - 32 - 22 * (len(lines) - 1)
+    for i, line in enumerate(lines):
+        text(d, (W // 2, top + i * 22), line, font(F_LIGHT, 16), fill=C_DIM, anchor="mm")
 
 
 # 难度档位配色：初/中/高三色；show+ 与「秀专属谱」各一色
@@ -451,7 +460,7 @@ def build_level(player, lv=12, show_n=30):
     dist_y = 300 + card_h + 24
     draw_acc_dist(d, dist_y, dist_h, played)
 
-    text(d, (W // 2, H - 32), footer(), font(F_LIGHT, 16), fill=C_DIM, anchor="mm")
+    draw_footer(d, H)
     return Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
 
 
@@ -533,12 +542,12 @@ def build(player, mode="b15", lv=12):
     draw_history(d, hist_y, hist_h, hist)
 
     if mode == "both":
-        foot = footer()
+        extra = ""
     else:
         total = sum(s["rating"] for s in sections[0][2])
         avg = total / len(sections[0][2]) if sections[0][2] else 0
-        foot = footer("合计 %d · 平均 %.1f" % (total, avg))
-    text(d, (W // 2, H - 32), foot, font(F_LIGHT, 16), fill=C_DIM, anchor="mm")
+        extra = "合计 %d · 平均 %.1f" % (total, avg)
+    draw_footer(d, H, extra)
 
     return Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
 
