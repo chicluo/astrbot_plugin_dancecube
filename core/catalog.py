@@ -15,6 +15,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .music import level_label
+from .safe import safe_cell
 
 HEADER_FILL = PatternFill("solid", fgColor="1F3B4D")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
@@ -111,7 +112,7 @@ def build_official(lib, path):
         dur = mmss(r.get("duration"))
         levels = r.get("levels") or []
         if not levels:
-            rows.append([mid, name, genre, dur, "未填", "", "", 0, 9, _int(mid)])
+            rows.append([mid, safe_cell(name), genre, dur, "未填", "", "", 0, 9, _int(mid)])
             continue
         for lv in levels:
             if lv.get("level") is not None and lv["level"] < 0 and not lv.get("isShow"):
@@ -125,10 +126,10 @@ def build_official(lib, path):
             level_num = level if isinstance(level, int) and level > 0 else 0
             rows.append([
                 mid,
-                name,
+                safe_cell(name),
                 genre,
                 dur,
-                label,
+                safe_cell(label),
                 level if level is not None else "",
                 lv.get("combo") or "",
                 level_num,
@@ -164,11 +165,11 @@ def build_user(lib, path):
             classic.append(None)
         row = [
             r.get("musicId"),
-            r.get("name") or "",
+            safe_cell(r.get("name") or ""),
             mmss(r.get("duration")),
             r.get("ownerId") or "",
-            r.get("ownerName") or "",
-            " / ".join(r.get("tags") or []),
+            safe_cell(r.get("ownerName") or ""),
+            safe_cell(" / ".join(r.get("tags") or [])),
             r.get("price") if r.get("price") is not None else "",
             r.get("like") if r.get("like") is not None else "",
             "⚠️" if any(lv.get("isBad") for lv in levels) else "",

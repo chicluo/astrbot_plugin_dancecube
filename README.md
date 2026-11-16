@@ -1,7 +1,5 @@
 (本插件全程由Deepseek-V4.1-Flash编译，就连这个说明也是)
 
-(如需体验请加Q群566567000)
-
 # 舞立方查询
 
 查询舞立方玩家信息、B15/R15 战力分析图、导出全部成绩、扫码登录。
@@ -30,18 +28,23 @@
 | 配置项 | 说明 |
 |---|---|
 | `owner_qq` | 机器人主人 QQ |
-| `allowed_groups` | 允许使用的群号，填 * 表示全部 |
+| `allowed_groups` | 允许使用的群标识，填 `*` 表示全部。**aiocqhttp 填真实群号；qq_official 填 group_openid**（形如 `C0A...`） |
+| `allow_private` | 允许好友私聊使用（仅 aiocqhttp 有效，官方个人开发者没有 C2C 私聊权限） |
 | `export_dir` | 成绩导出的本机目录（必须填） |
 | `catalog_ttl_minutes` | 曲库全表缓存分钟数，默认 30 |
 | `qr_timeout_seconds` | 扫码登录超时秒数 |
+| `insecure_tls` | 关闭 HTTPS 证书校验，默认 `false`（不推荐） |
+| `login_admin_only` | 只允许主人发起登录，默认 `false` |
 
 ## 注意事项
 
 - **Linux 需要中文字体**。插件按 `msyh.ttc` → `wqy-zenhei.ttc` → `NotoSansCJK` → `PingFang` 顺序找字体，一个都没有时图中中文会变成方块（日志会警告）。Debian/Ubuntu：`apt install fonts-wqy-zenhei`。
-- 扫码登录需要用户在机器上操作，二维码会直接发到聊天里。
-- 登录凭证以**明文 JSON** 存在 `plugin_data/astrbot_plugin_dancecube/tokens/` 下，任何能读该目录的进程都能接管账号，生产环境请收紧目录权限。
-- 同一用户 30 秒内只处理一次请求（登录单独 10 秒冷却），避免频繁打官方接口触发风控。
+- 扫码登录需要用户在机器上操作，二维码会直接发到聊天里。**非本人请勿扫码**：扫码即授权该条指令的发起者使用你的账号，登录成功消息会回显绑定的角色，异常容易被发现；每次绑定都会写一条审计日志。
+- 登录凭证以**明文 JSON** 存在 `plugin_data/astrbot_plugin_dancecube/tokens/` 下，插件会把目录收紧到 `0700`、文件收紧到 `0600`；部署在共享机器上时建议再确认一次权限。
+- 同一用户 30 秒内只处理一次请求（登录单独 10 秒冷却、单独计时，扫码成功后立刻查询不会被拦）。
 - 成绩导出目录必须存在，否则导出失败。
+- **HTTPS 默认校验证书**。只有确实撞上官方证书链问题的老环境，才建议打开 `insecure_tls`——打开后 token 可能被同一网络里的中间人截获，启动日志会警告。
+- 曲风统一取 `MusicCategoryNew`：`1 国语 / 3 韩文 / 4 欧美 / 6 其他`，导出成绩与官谱全表口径一致；自制谱不在曲库里，曲风显示 `-`。
 - `/曲目` 是强制指令，不会被自然语言触发。
 - 曲库全表生成后会缓存在 `plugin_data/astrbot_plugin_dancecube/tmp/catalog/`，`catalog_ttl_minutes` 内再有人要就直接重发上次的文件，不重新拉库。
 - **群文件容量查不了**：QQ 官方机器人 API 只有群信息（`/v2/groups/{group_openid}/info`）和群聊富媒体上传（`/v2/groups/{group_openid}/files`），没有群文件列表或容量接口；机器人发的文件走聊天富媒体、不落群文件空间，所以群文件满不会导致发送失败。发送失败时插件会把常见原因（超 200MB、限流、凭证过期）翻成人话提示。

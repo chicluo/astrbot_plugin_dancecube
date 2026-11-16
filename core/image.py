@@ -14,22 +14,16 @@ import argparse
 import io
 import logging
 import os
-import ssl
 import sys
-import urllib.request
 from datetime import datetime
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
-
-try:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-except Exception:
-    pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from .client import Player, load_token  # noqa: E402
+from . import net  # noqa: E402
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -188,12 +182,7 @@ def load_avatar(url, size):
     if not url:
         return None
     try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=15, context=ctx) as r:
-            data = r.read()
+        data = net.download(url, max_bytes=5 << 20, timeout=15)
         im = Image.open(io.BytesIO(data)).convert("RGBA")
         w, h = im.size
         s = min(w, h)
@@ -553,6 +542,10 @@ def build(player, mode="b15", lv=12):
 
 
 def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        pass
     ap = argparse.ArgumentParser(description="生成舞立方战力分析图")
     ap.add_argument("--mode", default="b15", choices=["b15", "b30", "ap30", "both", "level"])
     ap.add_argument("--lv", type=int, default=12, help="mode=level 时的定数（1-20）")

@@ -11,6 +11,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from .safe import safe_cell
+
 DEFAULT_EXPORT_DIR = ""
 
 HEADERS = [
@@ -64,18 +66,18 @@ def export_scores(player, out_dir=DEFAULT_EXPORT_DIR):
     for idx, s in enumerate(rows, 1):
         ws.append([
             idx,
-            s.get("name") or "",
+            safe_cell(s.get("name") or ""),
             s.get("musicId"),
             int(s.get("level") or 0),
-            s.get("levelTypeName") or "",
-            s.get("clsName") or "",
+            safe_cell(s.get("levelTypeName") or ""),
+            safe_cell(s.get("clsName") or ""),
             round(float(s.get("acc") or 0), 2),
             int(s.get("score") or 0),
             int(s.get("miss") or 0),
             int(s.get("combo") or 0),
             int(s.get("rating") or 0),
-            s.get("grade") or "-",
-            s.get("time") or "-",
+            safe_cell(s.get("grade") or "-"),
+            safe_cell(s.get("time") or "-"),
             "官谱" if int(s.get("ownerType") or 0) == 1 else "自制谱",
         ])
 

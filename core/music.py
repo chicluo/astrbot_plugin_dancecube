@@ -17,10 +17,11 @@ import json
 import mutagen
 import os
 import re
-import ssl
 import time
 import urllib.parse
 import urllib.request
+
+from . import net
 
 BASE = "https://dancedemo.shenghuayule.com"
 UA = (
@@ -66,17 +67,26 @@ def _find_token(plugin_data_dir):
 def _api(path, token, params=None):
     if not token:
         raise RuntimeError("曲库尚未初始化，请先让任意用户执行 /舞立方登录")
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
     url = BASE + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(
         url, headers={"User-Agent": UA, "Authorization": "Bearer " + token}
     )
-    with urllib.request.urlopen(req, timeout=40, context=ctx) as r:
+    with net.urlopen(req, timeout=40) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def _atomic_json(path, data):
+    """原子写 JSON：先写临时文件再 replace，避免并发读到半截。"""
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 def _norm_levels(items):
@@ -177,26 +187,13 @@ def _norm_user(item):
 
 
 def _probe_audio(url):
-    """下载音频读一次时长（按需兜底，约 1 秒）。"""
+    """下载音频读一次时长（按需兜底，约 1 秒）。只允许白名单域名，上限 64MB。"""
     import tempfile
 
     fd, path = tempfile.mkstemp(suffix=".bin")
     os.close(fd)
     try:
-        parts = urllib.parse.urlsplit(url)
-        enc = urllib.parse.urlunsplit(
-            (parts.scheme, parts.netloc, urllib.parse.quote(parts.path, safe="/%+"), parts.query, parts.fragment)
-        )
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(enc, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=60, context=ctx) as r, open(path, "wb") as f:
-            while True:
-                chunk = r.read(1 << 16)
-                if not chunk:
-                    break
-                f.write(chunk)
+        net.download_file(url, path, max_bytes=64 << 20, timeout=60)
         m = mutagen.File(path)
         if m is not None and getattr(m, "info", None):
             return round(float(m.info.length), 1)
@@ -273,16 +270,13 @@ class MusicLib:
             return record
         record["duration"] = dur
         try:
-            import json as _json
-
             p = os.path.join(os.path.dirname(str(self.cache_path)), "music_duration_user.json")
             data = {}
             if os.path.exists(p):
                 with open(p, encoding="utf-8") as f:
-                    data = _json.load(f)
+                    data = json.load(f)
             data[mid] = dur
-            with open(p, "w", encoding="utf-8") as f:
-                _json.dump(data, f, ensure_ascii=False)
+            _atomic_json(p, data)
             self._duration = None  # 下次重新加载
         except (OSError, ValueError):
             pass
@@ -330,12 +324,7 @@ class MusicLib:
         if not isinstance(songs, list):
             raise RuntimeError("官谱接口返回异常")
         self._official = [_norm_official(x) for x in songs]
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(songs, f, ensure_ascii=False)
-        except OSError:
-            pass
+        _atomic_json(path, songs)
         return self._official
 
     # ---------------------------------------------------------- 自制谱
@@ -351,26 +340,24 @@ class MusicLib:
                     return self._user
                 except (OSError, ValueError):
                     pass
-        items, page = [], 1
-        while page <= 20:
+        items, page, total = [], 1, 0
+        while page <= 30:
             d = self._fetch(
                 "/Dance/api/Goods/GetGoodsMusic",
                 {"page": page, "pagesize": 1000, "orderby": 3, "ordertype": 2},
             )
             lst = (d or {}).get("List") or []
+            if not lst:
+                break
             items.extend(_norm_user(x) for x in lst)
             total = int((d or {}).get("RecordCount") or 0)
-            if not lst or len(items) >= total:
+            # RecordCount 缺失或为 0 时继续翻，直到拿到空页为止
+            if total > 0 and len(items) >= total:
                 break
             page += 1
             time.sleep(0.3)
         self._user = items
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(items, f, ensure_ascii=False)
-        except OSError:
-            pass
+        _atomic_json(path, items)
         return self._user
 
     # ---------------------------------------------------------- 检索
@@ -402,6 +389,7 @@ class MusicLib:
                 except Exception:  # noqa: BLE001
                     hits = []
                 if hits:
+                    self.last_raw_total = len(hits)
                     return self._attach_duration([self.enrich_user(r) for r in hits[:limit]])
         out = []
         try:

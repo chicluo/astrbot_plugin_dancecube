@@ -8,21 +8,18 @@
      未扫码时返回 400 {"error":"unauthorized_client"}
 """
 import json
-import ssl
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from . import net
 
 BASE = "https://dancedemo.shenghuayule.com"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
-
-_CTX = ssl.create_default_context()
-_CTX.check_hostname = False
-_CTX.verify_mode = ssl.CERT_NONE  # 官方证书链在部分环境校验不过，成对关闭
 
 
 def _http(url, data=None, timeout=25):
@@ -33,7 +30,7 @@ def _http(url, data=None, timeout=25):
         headers["Content-Type"] = "application/x-www-form-urlencoded"
     req = urllib.request.Request(url, data=body, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=_CTX) as r:
+        with net.urlopen(req, timeout=timeout) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
@@ -52,9 +49,14 @@ def request_qr():
     if not qid or not qurl:
         raise RuntimeError("二维码接口返回缺少 ID/QrcodeUrl")
 
-    st2, img = _http(qurl)
-    if st2 != 200 or len(img) < 500:
-        raise RuntimeError("二维码图片下载失败：HTTP %s" % st2)
+    try:
+        img = net.download(qurl, max_bytes=5 << 20, timeout=25)
+    except ValueError as e:  # 域名不在白名单 / 超限
+        raise RuntimeError("二维码图片下载失败：%s" % e)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError("二维码图片下载失败：%s: %s" % (type(e).__name__, e))
+    if len(img) < 500:
+        raise RuntimeError("二维码图片下载失败：内容过短（%d 字节）" % len(img))
 
     meta = {
         "id": qid,

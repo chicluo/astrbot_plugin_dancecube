@@ -43,5 +43,17 @@
       "step": 1
     },
     "hint": "「/曲目 官谱全表」「/曲目 自制谱全表」生成后，在这段时间内再有人要就直接重发上次的文件，不重新拉库。"
+  },
+  "insecure_tls": {
+    "description": "关闭 HTTPS 证书校验（不推荐）",
+    "type": "bool",
+    "default": false,
+    "hint": "只在官方证书链确实过不了的老环境才打开。打开后 token 可能被同一网络里的中间人截获，日志会警告。"
+  },
+  "login_admin_only": {
+    "description": "只允许主人发起 /舞立方登录",
+    "type": "bool",
+    "default": false,
+    "hint": "默认开放给群友，扫码即绑定。高安全需求的群可以打开，代价是每次登录都要管理员在场。"
   }
 }

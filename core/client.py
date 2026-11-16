@@ -29,7 +29,6 @@ import argparse
 import csv
 import json
 import os
-import ssl
 import sys
 import time
 import urllib.error
@@ -38,17 +37,17 @@ import urllib.request
 from datetime import datetime
 
 try:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-except Exception:
-    pass
+    from . import net
+    from .safe import safe_cell
+except ImportError:  # 作为独立脚本运行（python core/client.py）
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import net  # noqa: E402
+    from safe import safe_cell  # noqa: E402
 
 BASE = os.environ.get("DC_BASE", "https://dancedemo.shenghuayule.com")
 HERE = os.path.dirname(os.path.abspath(__file__))
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-CTX = ssl.create_default_context()
-CTX.check_hostname = False
-CTX.verify_mode = ssl.CERT_NONE
 
 # show+ 谱的等级类型（MusicLevNew 101-105）
 SHOW_TYPE = {
@@ -98,7 +97,9 @@ def level_type_name(lev, old):
     return difficulty_name(lev, old)
 
 
-CLS_NAME = {2: "国语", 3: "粤语", 4: "韩语", 5: "欧美", 6: "其它"}
+# 曲风：MusicCategoryNew 1 国语 / 3 韩文 / 4 欧美 / 6 其他。
+# musicIndex 2..6 只是 GetMyRankNew 的分类请求参数，语义不同，不再拿来当曲风显示。
+GENRE_NAMES = {1: "国语", 3: "韩文", 4: "欧美", 6: "其他"}
 LADDER = ["未定级", "一星", "二星", "三星", "星钻", "表神", "里神"]
 
 
@@ -127,7 +128,7 @@ class Api:
             "Authorization": "Bearer " + self.token,
         })
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=CTX) as r:
+            with net.urlopen(req, timeout=timeout) as r:
                 raw = r.read()
                 return r.status, json.loads(raw.decode("utf-8", "replace"))
         except urllib.error.HTTPError as e:
@@ -197,6 +198,8 @@ class Player:
         self.api = Api(tok["access_token"], self.uid)
         self._scores = None
         self._lib_index = None
+        self._lib_categories = None
+        self._info = None
 
     def lib_lookup(self, music_id, level):
         """用曲库反查 (musicId, 定数) → MusicLevNew。
@@ -225,21 +228,47 @@ class Player:
             return difficulty_name(lev_new, old)
         return difficulty_name(lev, old)
 
-    def info(self):
+    def info_raw(self):
+        """(HTTP 状态码, 原始响应)；状态码 0 表示网络层失败，调用方可据此区分。"""
         return self.api.get("/Dance/api/User/GetInfo",
-                            {"userId": self.uid, "getNationRank": "true"})[1]
+                            {"userId": self.uid, "getNationRank": "true"})
+
+    def info(self, force=False):
+        """个人信息；接口异常时返回 dict（可能是 _error），不会崩。"""
+        if self._info is not None and not force:
+            return self._info
+        st, d = self.info_raw()
+        if isinstance(d, dict) and d.get("UserID"):
+            self._info = d
+        return d if isinstance(d, dict) else {}
 
     def account(self):
-        return self.api.get("/Dance/api/User/GetAccountInfo")[1]
+        st, d = self.api.get("/Dance/api/User/GetAccountInfo")
+        return d if isinstance(d, dict) else {}
 
     def stats_items(self):
-        return self.api.get("/Dance/api/ReplyTextItem/GetAllList", {"machineId": "0"})[1]
+        st, d = self.api.get("/Dance/api/ReplyTextItem/GetAllList", {"machineId": "0"})
+        return d if isinstance(d, list) else []
 
     def history(self):
-        return self.api.get("/Dance/api/User/GetLvRatioHistory", {"userId": self.uid})[1]
+        st, d = self.api.get("/Dance/api/User/GetLvRatioHistory", {"userId": self.uid})
+        return d if isinstance(d, list) else []
 
     def recent(self):
-        return self.api.get("/Dance/api/User/GetLastPlay")[1]
+        st, d = self.api.get("/Dance/api/User/GetLastPlay")
+        return d if isinstance(d, list) else []
+
+    def _category_of(self, music_id):
+        """官谱曲风：用曲库 MusicCategoryNew 反查，和「官谱全表」同一套映射。"""
+        if self._lib_categories is None:
+            idx = {}
+            try:
+                for s in self.music_library():
+                    idx[str(s.get("MusicID"))] = s.get("MusicCategoryNew")
+            except Exception:  # noqa: BLE001
+                pass
+            self._lib_categories = idx
+        return self._lib_categories.get(str(music_id))
 
     def recent_songs(self, n=None, official_only=False):
         """最近游玩记录，字段与 scores() 对齐，方便统一渲染。
@@ -285,40 +314,50 @@ class Player:
         return out[:n] if n else out
 
     def scores(self, force=False):
-        """全量成绩：musicIndex 2..6 五类曲风合并（这是官方唯一的全量入口）。"""
+        """全量成绩：musicIndex 2..6 五类合并（官方唯一的全量入口）。
+
+        五个请求相互独立，线程池并发，比串行省约 2 秒。
+        """
         if self._scores is not None and not force:
             return self._scores
+        from concurrent.futures import ThreadPoolExecutor
+
+        def fetch(cls):
+            return cls, self.api.get(
+                "/Dance/api/User/GetMyRankNew", {"musicIndex": str(cls)}
+            )[1]
+
         out = []
-        for cls in (2, 3, 4, 5, 6):
-            st, rep = self.api.get("/Dance/api/User/GetMyRankNew", {"musicIndex": str(cls)})
-            if not isinstance(rep, list):
-                continue
-            for song in rep:
-                for r in (song.get("ItemRankList") or []):
-                    lev = int(r.get("MusicLev", 0))
-                    lv = int(r.get("MusicRank", 0))
-                    pct = int(r.get("PlayerPercent", 0))
-                    acc = pct / 100.0
-                    old = r.get("MusicLevOld")
-                    out.append({
-                        "musicId": song.get("MusicID"),
-                        "name": song.get("Name"),
-                        "ownerType": int(song.get("OwnerType", 0)),
-                        "cls": cls,
-                        "clsName": CLS_NAME.get(cls, "?"),
-                        "levelType": lev,
-                        "levelTypeName": self._level_name(song.get("MusicID"), lv, lev, old),
-                        "diff": int(old) if old is not None else -1,
-                        "level": lv,
-                        "acc": acc,
-                        "score": int(r.get("PlayerScore", 0)),
-                        "combo": int(r.get("ComboCount", 0)),
-                        "miss": int(r.get("PlayerMiss", 0)),
-                        "time": r.get("RecordTime"),
-                        "rating": compute_rating(lv, acc),
-                        "grade": grade_of(acc, int(r.get("PlayerMiss", 0))),
-                    })
-            time.sleep(0.4)  # 官方限速约 10 req/s，串行即可
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            for cls, rep in pool.map(fetch, (2, 3, 4, 5, 6)):
+                if not isinstance(rep, list):
+                    continue
+                for song in rep:
+                    cat = self._category_of(song.get("MusicID"))
+                    for r in (song.get("ItemRankList") or []):
+                        lev = int(r.get("MusicLev", 0))
+                        lv = int(r.get("MusicRank", 0))
+                        pct = int(r.get("PlayerPercent", 0))
+                        acc = pct / 100.0
+                        old = r.get("MusicLevOld")
+                        out.append({
+                            "musicId": song.get("MusicID"),
+                            "name": song.get("Name"),
+                            "ownerType": int(song.get("OwnerType", 0)),
+                            "cls": cls,
+                            "clsName": GENRE_NAMES.get(cat, "-"),
+                            "levelType": lev,
+                            "levelTypeName": self._level_name(song.get("MusicID"), lv, lev, old),
+                            "diff": int(old) if old is not None else -1,
+                            "level": lv,
+                            "acc": acc,
+                            "score": int(r.get("PlayerScore", 0)),
+                            "combo": int(r.get("ComboCount", 0)),
+                            "miss": int(r.get("PlayerMiss", 0)),
+                            "time": r.get("RecordTime"),
+                            "rating": compute_rating(lv, acc),
+                            "grade": grade_of(acc, int(r.get("PlayerMiss", 0))),
+                        })
         self._scores = out
         return out
 
@@ -395,6 +434,11 @@ def fmt_int(n):
         return "{:,}".format(int(n))
     except Exception:
         return str(n)
+
+
+def _row(values):
+    """CSV 一行，逐格做公式注入净化。"""
+    return [safe_cell(v) for v in values]
 
 
 def _w(s):
@@ -483,7 +527,7 @@ def show_history(p, as_csv=False):
             w = csv.writer(f)
             w.writerow(["时间", "战力", "变化前"])
             for r in h:
-                w.writerow([r["LogTime"], r["LvRatio"], r["LvRatioOld"]])
+                w.writerow(_row([r["LogTime"], r["LvRatio"], r["LvRatioOld"]]))
         print("已导出 %s（%d 条）" % (out, len(h)))
         return
     print(hr("═"))
@@ -563,8 +607,9 @@ def cmd_export(p, outdir):
         w = csv.writer(f)
         w.writerow(["曲名", "MusicID", "定数", "难度类型", "ACC", "分数", "Miss", "战力", "评级", "时间"])
         for s in rows:
-            w.writerow([s["name"], s["musicId"], s["level"], s["levelTypeName"],
-                        "%.2f" % s["acc"], s["score"], s["miss"], s["rating"], s["grade"], s["time"]])
+            w.writerow(_row([s["name"], s["musicId"], s["level"], s["levelTypeName"],
+                             "%.2f" % s["acc"], s["score"], s["miss"], s["rating"],
+                             s["grade"], s["time"]]))
     print("  [ok] %-28s %7d B" % ("scores.csv", os.path.getsize(csv_path)))
 
 
@@ -683,16 +728,16 @@ def cmd_level(p, lv, args):
         w.writerow(["曲名", "MusicID", "定数", "难度类型", "物量", "ACC", "分数",
                     "Miss", "战力", "评级", "游玩时间", "状态"])
         for s in played:
-            w.writerow([s["name"], s["musicId"], s["level"], s["levelTypeName"], s["combo"],
-                        "%.2f" % s["acc"], s["score"], s["miss"], s["rating"],
-                        s["grade"], s["time"], "已游玩"])
+            w.writerow(_row([s["name"], s["musicId"], s["level"], s["levelTypeName"], s["combo"],
+                             "%.2f" % s["acc"], s["score"], s["miss"], s["rating"],
+                             s["grade"], s["time"], "已游玩"]))
         for s in unplayed:
-            w.writerow([s["name"], s["musicId"], s["level"], s["levelTypeName"], s["combo"],
-                        "", "", "", "", "", "", "未游玩"])
+            w.writerow(_row([s["name"], s["musicId"], s["level"], s["levelTypeName"], s["combo"],
+                             "", "", "", "", "", "", "未游玩"]))
         for s in outside:
-            w.writerow([s["name"], s["musicId"], s["level"], s["levelTypeName"], "",
-                        "%.2f" % s["acc"], s["score"], s["miss"], s["rating"],
-                        s["grade"], s["time"], "自制谱"])
+            w.writerow(_row([s["name"], s["musicId"], s["level"], s["levelTypeName"], "",
+                             "%.2f" % s["acc"], s["score"], s["miss"], s["rating"],
+                             s["grade"], s["time"], "自制谱"]))
     print()
     print("已导出 %s（%d 行）" % (out, len(played) + len(unplayed) + len(outside)))
 
@@ -837,13 +882,13 @@ def cmd_all(p, args):
         w.writerow(["曲名", "MusicID", "定数", "难度类型", "物量", "ACC", "分数",
                     "Miss", "战力", "评级", "游玩时间", "状态", "曲风"])
         for r in rows:
-            w.writerow([r["name"], r["musicId"], r["level"], r["levelTypeName"],
-                        r["combo"] if r["combo"] is not None else "",
-                        "%.2f" % r["acc"] if r["acc"] is not None else "",
-                        r["score"] if r["score"] is not None else "",
-                        r["miss"] if r["miss"] is not None else "",
-                        r["rating"] if r["rating"] is not None else "",
-                        r["grade"] or "", r["time"] or "", r["state"], r["cls"] or ""])
+            w.writerow(_row([r["name"], r["musicId"], r["level"], r["levelTypeName"],
+                             r["combo"] if r["combo"] is not None else "",
+                             "%.2f" % r["acc"] if r["acc"] is not None else "",
+                             r["score"] if r["score"] is not None else "",
+                             r["miss"] if r["miss"] is not None else "",
+                             r["rating"] if r["rating"] is not None else "",
+                             r["grade"] or "", r["time"] or "", r["state"], r["cls"] or ""]))
 
     # 每首歌一行：取该曲最佳成绩
     by_song = {}
@@ -864,11 +909,11 @@ def cmd_all(p, args):
                     "最佳难度", "最佳ACC", "评级", "状态"])
         for k, s in sorted(by_song.items(), key=lambda kv: -(kv[1]["best"]["rating"] if kv[1]["best"] else 0)):
             b = s["best"]
-            w.writerow([s["name"], k, s["charts"], s["played"],
-                        max(s["levels"]) if s["levels"] else "",
-                        b["rating"] if b else "", b["levelTypeName"] if b else "",
-                        "%.2f" % b["acc"] if b else "", (b["grade"] or "") if b else "",
-                        "已游玩" if s["played"] else "未游玩"])
+            w.writerow(_row([s["name"], k, s["charts"], s["played"],
+                             max(s["levels"]) if s["levels"] else "",
+                             b["rating"] if b else "", b["levelTypeName"] if b else "",
+                             "%.2f" % b["acc"] if b else "", (b["grade"] or "") if b else "",
+                             "已游玩" if s["played"] else "未游玩"]))
 
     print()
     print("已导出：")
@@ -955,15 +1000,19 @@ def cmd_ranked(p, args):
         w.writerow(["排名", "定数", "曲名", "MusicID", "难度类型", "完成度ACC",
                     "分数", "Miss", "战力", "评级", "物量", "游玩时间"])
         for i, r in enumerate(rows, 1):
-            w.writerow([i, r["level"], r["name"], r["musicId"], r["levelTypeName"],
-                        "%.2f" % r["acc"], r["score"], r["miss"], r["rating"],
-                        r["grade"] or "", r["combo"] if r["combo"] is not None else "",
-                        r["time"] or ""])
+            w.writerow(_row([i, r["level"], r["name"], r["musicId"], r["levelTypeName"],
+                             "%.2f" % r["acc"], r["score"], r["miss"], r["rating"],
+                             r["grade"] or "", r["combo"] if r["combo"] is not None else "",
+                             r["time"] or ""]))
     print()
     print("已导出 %s（%d 行）" % (out, len(rows)))
 
 
 def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        pass
     ap = argparse.ArgumentParser(description="舞立方官方接口本地客户端")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("info")

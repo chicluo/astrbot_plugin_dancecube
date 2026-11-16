@@ -13,6 +13,7 @@
 """
 import asyncio
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -26,11 +27,26 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from .core import catalog as dc_catalog
 from .core import image as dc_image
 from .core import login as dc_login
+from .core import net
 from .core.client import Player
 from .core.export import DEFAULT_EXPORT_DIR, export_scores
 from .core.profile_image import build_info
+from .core.safe import safe_error
 
 PLUGIN_NAME = "astrbot_plugin_dancecube"
+
+
+def _harden_dir(path):
+    """尽量把凭证目录收紧到 0700（Windows 上 chmod 只影响只读位，不报错）。"""
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+def _safe_qq(qq: str) -> str:
+    """QQ/openid 只保留安全字符，避免拼路径时被 ../ 之类带出去。"""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", str(qq or "user"))
 
 # 「/曲目 官谱全表」「/曲目 自制谱全表」：直接出 xlsx，不按曲名搜
 CATALOG_KEYS = {
@@ -62,16 +78,48 @@ class DanceCube(star.Star):
     def __init__(self, context: star.Context, config: AstrBotConfig) -> None:
         super().__init__(context, config)
         self.config = config
+        # 安全：默认校验证书；只有显式打开 insecure_tls 才退回旧行为
+        try:
+            insecure = bool(config.get("insecure_tls", False))
+        except Exception:  # noqa: BLE001
+            insecure = False
+        net.set_verify_tls(not insecure)
+        if insecure:
+            self.logger.warning(
+                "[dancecube] 已关闭 TLS 证书校验（insecure_tls=true），token 可能被中间人截获"
+            )
         base = Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME
         self.tokens_dir = base / "tokens"
         self.tmp_dir = base / "tmp"
         self.tokens_dir.mkdir(parents=True, exist_ok=True)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
+        _harden_dir(self.tokens_dir)
         self._pending: dict[str, asyncio.Task] = {}
         self._last_call: dict[str, float] = {}
+        self._catalog_lock = asyncio.Lock()
         self._ensure_music_cache()
+        groups = [str(g).strip() for g in (config.get("allowed_groups") or [])]
+        if "*" in groups:
+            self.logger.warning(
+                "[dancecube] allowed_groups 含 *，所有群都能使用登录入口，请确认这是本意"
+            )
 
     # ------------------------------------------------------------ 基础工具
+    def _platform(self, event: AstrMessageEvent) -> str:
+        try:
+            return str(event.get_platform_name() or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _warn_openid_once(self) -> None:
+        if getattr(self, "_warned_openid", False):
+            return
+        self._warned_openid = True
+        self.logger.warning(
+            "[dancecube] allowed_groups 里填的是数字群号，但 qq_official 平台拿到的是 "
+            "group_openid，永远匹配不上；请改填 openid，或用 * 放开全部群"
+        )
+
     def _allowed(self, event: AstrMessageEvent) -> bool:
         sender = str(event.get_sender_id() or "")
         owner = str(self.config.get("owner_qq") or "").strip()
@@ -88,14 +136,22 @@ class DanceCube(star.Star):
             }
             if "*" in groups:
                 return True  # 所有群放行
-            return str(event.get_group_id() or "") in groups
+            gid = str(event.get_group_id() or "")
+            if gid and gid in groups:
+                return True
+            # 官方平台的群标识是 openid，填真实群号永远匹配不上，提示一次
+            if gid and self._platform(event) == "qq_official" and any(
+                g.isdigit() for g in groups
+            ):
+                self._warn_openid_once()
+            return False
         # 其它消息类型（官方机器人偶发的 OTHER_MESSAGE）按私聊处理
         if message_type == MessageType.OTHER_MESSAGE:
             return bool(self.config.get("allow_private", True))
         return False
 
     def _token_path(self, qq: str) -> Path:
-        return self.tokens_dir / f"{qq}.json"
+        return self.tokens_dir / f"{_safe_qq(qq)}.json"
 
     def _load_token(self, qq: str):
         path = self._token_path(qq)
@@ -108,9 +164,14 @@ class DanceCube(star.Star):
         return tok if tok.get("access_token") else None
 
     def _save_token(self, qq: str, tok: dict) -> None:
-        self._token_path(qq).write_text(
+        path = self._token_path(qq)
+        path.write_text(
             json.dumps(tok, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        try:
+            os.chmod(path, 0o600)  # 只有运行账号能读
+        except OSError:
+            pass
 
     def _drop_token(self, qq: str) -> bool:
         path = self._token_path(qq)
@@ -120,7 +181,7 @@ class DanceCube(star.Star):
         return False
 
     def _tmp_path(self, prefix: str, qq: str) -> Path:
-        return self.tmp_dir / f"{prefix}_{qq}_{int(time.time() * 1000)}.png"
+        return self.tmp_dir / f"{prefix}_{_safe_qq(qq)}_{int(time.time() * 1000)}.png"
 
     def _clean_tmp(self, keep_seconds: int = 3600) -> None:
         deadline = time.time() - keep_seconds
@@ -131,13 +192,17 @@ class DanceCube(star.Star):
             except OSError:
                 pass
 
-    def _cooldown_wait(self, qq: str, seconds: int = 30) -> int:
-        """同一用户短时间内的重复请求拦截，返回需要等待的秒数（0 表示放行）。"""
+    def _cooldown_wait(self, qq: str, seconds: int = 30, kind: str = "query") -> int:
+        """同一用户短时间内的重复请求拦截，返回需要等待的秒数（0 表示放行）。
+
+        登录与查询分开计时：扫码成功后立刻查一下不会被 30 秒窗口挡住。
+        """
+        key = "%s:%s" % (kind, qq)
         now = time.time()
-        last = self._last_call.get(qq, 0.0)
+        last = self._last_call.get(key, 0.0)
         if now - last < seconds:
             return max(1, int(seconds - (now - last)))
-        self._last_call[qq] = now
+        self._last_call[key] = now
         return 0
 
     async def _player(self, event: AstrMessageEvent):
@@ -151,13 +216,18 @@ class DanceCube(star.Star):
             return None, "你还没有登录舞立方。\n请先发送 /舞立方登录 扫码。"
         try:
             player = Player(tok)
-            info = await asyncio.to_thread(player.info)
+            status, info = await asyncio.to_thread(player.info_raw)
         except Exception as e:  # noqa: BLE001
-            return None, f"连接舞立方失败：{e}"
-        if not isinstance(info, dict) or not info.get("UserID"):
+            return None, "连接舞立方失败：%s" % safe_error(e)
+        if isinstance(info, dict) and info.get("UserID"):
+            return player, ""
+        # 只有明确的认证失败才删 token；网络抖动保留凭证，免得用户重新扫码
+        if status in (401, 403):
             self._drop_token(qq)
             return None, "你的登录凭证已失效，请重新发送 /舞立方登录 扫码。"
-        return player, ""
+        if status == 0:
+            return None, "连接舞立方失败（网络超时），请稍后再试。"
+        return None, "舞立方接口返回异常（HTTP %s），请稍后再试。" % status
 
     async def _render(self, player: Player, mode: str, qq: str) -> Path:
         """在线程池里出图，返回本地图片路径。"""
@@ -202,7 +272,12 @@ class DanceCube(star.Star):
             return
 
         qq = str(event.get_sender_id())
-        wait = self._cooldown_wait(qq, seconds=10)
+        if self.config.get("login_admin_only", False):
+            owner = str(self.config.get("owner_qq") or "").strip()
+            if not owner or qq != owner:
+                yield event.plain_result("管理员开启了「仅管理员可登录」，请联系管理员。")
+                return
+        wait = self._cooldown_wait(qq, seconds=10, kind="login")
         if wait:
             yield event.plain_result(f"登录操作太频繁，请 {wait} 秒后再试。")
             return
@@ -217,7 +292,7 @@ class DanceCube(star.Star):
         try:
             png, meta = await asyncio.to_thread(dc_login.request_qr)
         except Exception as e:  # noqa: BLE001
-            yield event.plain_result(f"获取二维码失败：{e}")
+            yield event.plain_result("获取二维码失败：%s" % safe_error(e))
             return
 
         self._clean_tmp()
@@ -230,8 +305,8 @@ class DanceCube(star.Star):
                 Comp.Plain(
                     head
                     + "请使用微信扫描下方二维码完成舞立方登录。\n"
-                    f"⚠️ 此二维码只属于你（{event.get_sender_id()}），请勿转发给他人。\n"
-                    f"有效期 {timeout} 秒。"
+                    "⚠️ 非本人请勿扫码：扫码即授权本次指令的发起者使用你的账号。\n"
+                    f"二维码只属于 {event.get_sender_id()}，有效期 {timeout} 秒。"
                 ),
                 Comp.Image.fromFileSystem(str(qr_path)),
             ]
@@ -274,18 +349,38 @@ class DanceCube(star.Star):
             try:
                 player = Player(tok)
                 info = await asyncio.to_thread(player.info)
-                name = (info or {}).get("UserName") or "舞立方玩家"
+                info = info if isinstance(info, dict) else {}
+                name = info.get("UserName") or "舞立方玩家"
+                role_id = info.get("UserID") or "-"
+                # 审计日志：谁把哪个角色绑到了哪个 QQ/openid
+                try:
+                    self.logger.info(
+                        "账号绑定：发起者 %s · 角色 %s（%s）· 平台 %s",
+                        qq,
+                        name,
+                        role_id,
+                        self._platform(event) or "unknown",
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
                 img_path = await self._render(player, "info", qq)
                 chain = (
                     MessageChain()
-                    .message(f"✅ 登录成功！欢迎你，{name}。\n这是你的个人信息：")
+                    .message(
+                        f"✅ 登录成功！已绑定角色：{name}（ID {role_id}）。\n"
+                        "这是你的个人信息："
+                    )
                     .file_image(str(img_path))
                 )
             except Exception as e:  # noqa: BLE001
-                chain = MessageChain().message(f"✅ 登录成功，但个人信息生成失败：{e}")
+                chain = MessageChain().message(
+                    "✅ 登录成功，但个人信息生成失败：%s" % safe_error(e)
+                )
             await self._notify(event, chain)
         except Exception as e:  # noqa: BLE001
-            await self._notify(event, MessageChain().message(f"登录流程出错：{e}"))
+            await self._notify(
+                event, MessageChain().message("登录流程出错：%s" % safe_error(e))
+            )
         finally:
             self._pending.pop(qq, None)
 
@@ -312,7 +407,7 @@ class DanceCube(star.Star):
             path = await self._render(player, "info", str(event.get_sender_id()))
             yield event.image_result(str(path))
         except Exception as e:  # noqa: BLE001
-            yield event.plain_result(f"查询失败：{e}")
+            yield event.plain_result("查询失败：%s" % safe_error(e))
 
     @filter.command("myrt", alias={"战力分析"})
     async def myrt(self, event: AstrMessageEvent):
@@ -371,7 +466,7 @@ class DanceCube(star.Star):
             lib = self._music_lib()
             hits = await asyncio.to_thread(lib.find, name, 50)
         except Exception as e:  # noqa: BLE001
-            yield event.plain_result("曲库查询失败：%s" % e)
+            yield event.plain_result("曲库查询失败：%s" % safe_error(e))
             return
         if not hits:
             yield event.plain_result("曲库里没有找到含\u300c%s\u300d的曲子。" % name)
@@ -424,26 +519,29 @@ class DanceCube(star.Star):
         """出一份曲库全表：TTL 内直接重发上次生成的文件，避免反复拉库。"""
         label = "官谱全表" if kind == "official" else "自制谱全表"
         path = self._catalog_dir() / ("%s.xlsx" % kind)
-        age_sec = None
-        try:
-            if path.exists():
-                age_sec = time.time() - path.stat().st_mtime
-        except OSError:
-            age_sec = None
 
-        if age_sec is not None and age_sec < self._catalog_ttl():
-            yield event.plain_result(
-                "%s（%d 分钟前生成，直接复用）" % (label, int(age_sec // 60))
-            )
-        else:
-            yield event.plain_result("正在生成%s，请稍候…" % label)
+        async with self._catalog_lock:
+            age_sec = None
             try:
-                path, rows, songs = await asyncio.to_thread(self._build_catalog, kind)
-            except Exception as e:  # noqa: BLE001
-                yield event.plain_result("生成%s失败：%s" % (label, e))
-                return
-            extra = "，%d 首曲目" % songs if songs else ""
-            yield event.plain_result("%s已生成：%d 行%s" % (label, rows, extra))
+                st = path.stat()
+                if st.st_size > 0:  # 0 字节说明上次写失败，不能复用
+                    age_sec = time.time() - st.st_mtime
+            except OSError:
+                age_sec = None
+
+            if age_sec is not None and age_sec < self._catalog_ttl():
+                yield event.plain_result(
+                    "%s（%d 分钟前生成，直接复用）" % (label, int(age_sec // 60))
+                )
+            else:
+                yield event.plain_result("正在生成%s，请稍候…" % label)
+                try:
+                    path, rows, songs = await asyncio.to_thread(self._build_catalog, kind)
+                except Exception as e:  # noqa: BLE001
+                    yield event.plain_result("生成%s失败：%s" % (label, safe_error(e)))
+                    return
+                extra = "，%d 首曲目" % songs if songs else ""
+                yield event.plain_result("%s已生成：%d 行%s" % (label, rows, extra))
 
         shown = "%s_%s.xlsx" % (label, time.strftime("%Y%m%d"))
         try:
@@ -457,8 +555,23 @@ class DanceCube(star.Star):
                 "文件发送失败：%s\n详情：%s\n"
                 "官方接口不提供群文件容量查询，机器人发的文件也不占群文件空间，"
                 "所以群文件满不是这里的原因；反复失败请让管理员从本机取。"
-                % (_file_send_hint(e), e)
+                % (_file_send_hint(e), safe_error(e))
             )
+
+    async def terminate(self):
+        """插件卸载/重载：取消还在轮询的登录任务，避免后台继续写 token。"""
+        for task in list(self._pending.values()):
+            try:
+                task.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        self._pending.clear()
+        parent = getattr(super(), "terminate", None)
+        if parent is not None:
+            try:
+                await parent()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _ensure_music_cache(self):
         """首次部署时把插件自带的曲库快照复制到 plugin_data，省一次全量拉取。"""
@@ -483,7 +596,6 @@ class DanceCube(star.Star):
             import os as _os
             from .core import music as music_lib_mod
 
-            self._ensure_music_cache()
             base = get_astrbot_plugin_data_path()
             self._mlib = music_lib_mod.MusicLib(
                 _os.path.join(base, "astrbot_plugin_dancecube", "music", "music_library.json"),
@@ -509,7 +621,7 @@ class DanceCube(star.Star):
                 export_scores, player, out_dir
             )
         except Exception as e:  # noqa: BLE001
-            yield event.plain_result(f"导出失败：{e}")
+            yield event.plain_result("导出失败：%s" % safe_error(e))
             return
 
         # 路径只记进日志，不回复给用户
@@ -544,4 +656,4 @@ class DanceCube(star.Star):
             path = await self._render(player, mode, str(event.get_sender_id()))
             return event.image_result(str(path))
         except Exception as e:  # noqa: BLE001
-            return event.plain_result(f"生成战力分析图失败：{e}")
+            return event.plain_result("生成战力分析图失败：%s" % safe_error(e))
