@@ -51,6 +51,12 @@ class TestHostAllowed(unittest.TestCase):
 
     def test_fake_subdomain_blocked(self):
         self.assertFalse(net.host_allowed("https://evil.aliyuncs.com/x"))
+        self.assertFalse(net.host_allowed("https://evil.myqcloud.com/x"))
+
+    def test_cos_allowed(self):
+        self.assertTrue(
+            net.host_allowed("https://bucket-125.cos.ap-guangzhou.myqcloud.com/x")
+        )
 
 
 class TestRating(unittest.TestCase):

@@ -22,7 +22,7 @@ _ALLOWED_HOST_PATTERNS = (
     r"(?:.+\.)?qlogo\.cn",
     r"(?:.+\.)?qpic\.cn",
     r"[a-z0-9-]+\.oss-cn-[a-z0-9-]+\.aliyuncs\.com",
-    r"(?:.+\.)?myqcloud\.com",
+    r"[a-z0-9-]+\.cos\.[a-z0-9-]+\.myqcloud\.com",
 )
 _ALLOWED_HOST_RE = re.compile(
     "(?:" + "|".join("(?:%s)" % p for p in _ALLOWED_HOST_PATTERNS) + ")"

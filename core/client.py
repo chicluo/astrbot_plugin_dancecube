@@ -55,6 +55,18 @@ CACHE_DIR = os.environ.get("DC_CACHE_DIR") or os.path.join(
 MUSIC_LIB_PATH = None
 
 
+def _atomic_write_json(path, data):
+    """原子写 JSON：先写临时文件再 replace，避免别人读到半截。"""
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def set_music_library_path(path):
     global MUSIC_LIB_PATH
     MUSIC_LIB_PATH = str(path) if path else None
@@ -391,9 +403,7 @@ class Player:
                 pass
         st, d = self.api.get("/Dance/MusicData/GetValidMusicList")
         if isinstance(d, list):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(d, f, ensure_ascii=False)
+            _atomic_write_json(path, d)  # 和 MusicLib 共用文件，必须是原子写
             return d
         return []
 
