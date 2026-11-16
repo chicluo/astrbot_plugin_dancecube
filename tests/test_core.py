@@ -33,6 +33,11 @@ class TestSafeError(unittest.TestCase):
     def test_token_masked(self):
         self.assertIn("[凭证]", safe_error(ValueError("access_token 过期")))
 
+    def test_relative_path_masked(self):
+        msg = safe_error(ValueError("core/out/musiclib.json 打不开"))
+        self.assertIn("[路径]", msg)
+        self.assertNotIn("musiclib", msg)
+
 
 class TestHostAllowed(unittest.TestCase):
     def test_allowed(self):
@@ -43,6 +48,9 @@ class TestHostAllowed(unittest.TestCase):
         self.assertFalse(net.host_allowed("http://dancedemo.shenghuayule.com/x"))
         self.assertFalse(net.host_allowed("file:///C:/x"))
         self.assertFalse(net.host_allowed("https://127.0.0.1/x"))
+
+    def test_fake_subdomain_blocked(self):
+        self.assertFalse(net.host_allowed("https://evil.aliyuncs.com/x"))
 
 
 class TestRating(unittest.TestCase):

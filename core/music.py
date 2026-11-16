@@ -26,6 +26,8 @@ from . import net
 
 # 时长缓存的读-改-写要串行，否则并发探测会互相覆盖
 _WRITE_LOCK = threading.Lock()
+# 自制谱全量拉取约 56 秒，并发请求只让一个真的去拉
+_LOAD_LOCK = threading.Lock()
 
 BASE = "https://dancedemo.shenghuayule.com"
 UA = (
@@ -336,34 +338,37 @@ class MusicLib:
     def load_user(self, force=False):
         if self._user is not None and not force:
             return self._user
-        path = str(self.cache_path).replace(".json", "_user.json")
-        if not force and os.path.exists(path):
-            if time.time() - os.path.getmtime(path) < USER_TTL:
-                try:
-                    with open(path, encoding="utf-8") as f:
-                        self._user = json.load(f)
-                    return self._user
-                except (OSError, ValueError):
-                    pass
-        items, page, total = [], 1, 0
-        while page <= 30:
-            d = self._fetch(
-                "/Dance/api/Goods/GetGoodsMusic",
-                {"page": page, "pagesize": 1000, "orderby": 3, "ordertype": 2},
-            )
-            lst = (d or {}).get("List") or []
-            if not lst:
-                break
-            items.extend(_norm_user(x) for x in lst)
-            total = int((d or {}).get("RecordCount") or 0)
-            # RecordCount 缺失或为 0 时继续翻，直到拿到空页为止
-            if total > 0 and len(items) >= total:
-                break
-            page += 1
-            time.sleep(0.3)
-        self._user = items
-        _atomic_json(path, items)
-        return self._user
+        with _LOAD_LOCK:  # 全量拉取约 56 秒，并发请求只让一个真的去拉
+            if self._user is not None and not force:
+                return self._user
+            path = str(self.cache_path).replace(".json", "_user.json")
+            if not force and os.path.exists(path):
+                if time.time() - os.path.getmtime(path) < USER_TTL:
+                    try:
+                        with open(path, encoding="utf-8") as f:
+                            self._user = json.load(f)
+                        return self._user
+                    except (OSError, ValueError):
+                        pass
+            items, page, total = [], 1, 0
+            while page <= 30:
+                d = self._fetch(
+                    "/Dance/api/Goods/GetGoodsMusic",
+                    {"page": page, "pagesize": 1000, "orderby": 3, "ordertype": 2},
+                )
+                lst = (d or {}).get("List") or []
+                if not lst:
+                    break
+                items.extend(_norm_user(x) for x in lst)
+                total = int((d or {}).get("RecordCount") or 0)
+                # RecordCount 缺失或为 0 时继续翻，直到拿到空页为止
+                if total > 0 and len(items) >= total:
+                    break
+                page += 1
+                time.sleep(0.3)
+            self._user = items
+            _atomic_json(path, items)
+            return self._user
 
     # ---------------------------------------------------------- 检索
     def _search(self, records, keyword):

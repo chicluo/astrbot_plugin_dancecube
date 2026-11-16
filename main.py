@@ -26,6 +26,7 @@ from astrbot.core.platform.message_type import MessageType
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .core import catalog as dc_catalog
+from .core import client as dc_client
 from .core import image as dc_image
 from .core import login as dc_login
 from .core import net
@@ -106,6 +107,8 @@ class DanceCube(star.Star):
         self.tokens_dir.mkdir(parents=True, exist_ok=True)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         _harden_dir(self.tokens_dir)
+        # 让 Player 的曲库缓存直接用 plugin_data 的同一份快照，避免两套缓存
+        dc_client.set_music_library_path(base / "music" / "music_library.json")
         self._pending: dict[str, asyncio.Task] = {}
         self._last_call: dict[str, float] = {}
         self._catalog_lock = asyncio.Lock()
@@ -353,6 +356,8 @@ class DanceCube(star.Star):
         self, event: AstrMessageEvent, qq: str, qr_id: str, timeout: int
     ) -> None:
         try:
+            # 先让二维码消息发出去，避免极端“秒扫”时成功消息排在二维码之前
+            await asyncio.sleep(1.0)
             tok = await asyncio.to_thread(dc_login.poll_token, qr_id, timeout)
             if not tok:
                 await self._notify(event, "二维码已过期，请重新发送 /舞立方登录。")

@@ -51,6 +51,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.environ.get("DC_CACHE_DIR") or os.path.join(
     tempfile.gettempdir(), "dancecube"
 )
+# 由插件启动时指到 plugin_data 的曲库快照，和 MusicLib 共用同一份，避免两套缓存
+MUSIC_LIB_PATH = None
+
+
+def set_music_library_path(path):
+    global MUSIC_LIB_PATH
+    MUSIC_LIB_PATH = str(path) if path else None
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
@@ -376,7 +383,7 @@ class Player:
 
     def music_library(self, max_age_h=24):
         """曲库（950 首，含每谱面定数与物量）。本地缓存 24h，避免每次拉 480KB。"""
-        path = os.path.join(CACHE_DIR, "musiclib.json")
+        path = MUSIC_LIB_PATH or os.path.join(CACHE_DIR, "musiclib.json")
         if os.path.exists(path) and time.time() - os.path.getmtime(path) < max_age_h * 3600:
             try:
                 return json.load(open(path, encoding="utf-8"))

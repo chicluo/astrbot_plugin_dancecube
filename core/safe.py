@@ -5,8 +5,10 @@ import re
 # Excel / WPS 会把以这些字符开头的文本当公式（CWE-1236）
 _INJECT_PREFIX = ("=", "+", "-", "@", "\t", "\r")
 
-# 绝对路径：E:/a/b/c、/home/x/y、core/out/musiclib.json 之类
+# 绝对路径：E:/a/b/c、/home/x/y
 _PATH_RE = re.compile(r"(?:[A-Za-z]:)?[/\\](?:[\w.\-]+[/\\])+[\w.\-]+")
+# 插件内的相对路径：core/out/x.json、data/a.json
+_REL_PATH_RE = re.compile(r"\b(?:core|data|tests|plugin_data)[/\\][\w.\-/\\]+")
 _TOKEN_RE = re.compile(r"(?i)(access_)?token")
 
 
@@ -27,6 +29,7 @@ def safe_cell(value):
 def safe_error(exc, limit=160):
     """把异常压成一句可回显的话：路径与凭证关键字替换掉，日志里保留原文。"""
     msg = "%s: %s" % (type(exc).__name__, exc)
-    msg = _PATH_RE.sub("[路径]", msg)  # 先吃路径，避免 token.json 被拆成 token.[路径]
+    msg = _REL_PATH_RE.sub("[路径]", msg)  # 先处理插件内相对路径
+    msg = _PATH_RE.sub("[路径]", msg)  # 再吃绝对路径，避免 token.json 被拆成 token.[路径]
     msg = _TOKEN_RE.sub("[凭证]", msg)
     return msg[:limit]
