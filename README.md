@@ -36,6 +36,24 @@
 | `insecure_tls` | 关闭 HTTPS 证书校验，默认 `false`（不推荐） |
 | `login_admin_only` | 只允许主人发起登录，默认 `false` |
 
+## 换到别的 bot 框架
+
+业务逻辑全在 `core/service.py`，**不依赖 AstrBot**（`core/` 里 `import astrbot` 为 0）。
+接入其他框架只需要写一层翻译：
+
+1. 构造 `DanceCubeService(config, data_dir, bundled_data_dir, notifier, logger)`；
+2. 把消息整理成 `RequestContext(user_id, group_id, is_group, platform, text, origin)`；
+3. `async for reply in service.song(ctx): ...`，把 `Text` / `Image` / `File` 自己发出去；
+4. 登录完成后的通知走 `notifier(ctx, replies)`（没有就只记日志）。
+
+`examples/nonebot2_adapter.py` 是 NoneBot2（OneBot v11）的完整示例。
+Koishi / Yunzai 这类非 Python 框架，建议把 core 包一层 FastAPI 当 HTTP 服务调，而不是重写。
+
+两个要注意的差异：
+
+- 群标识：`qq_official` 是 `group_openid`，OneBot 是数字群号，`allowed_groups` 要按平台填；
+- 发文件：OneBot 有 `upload_group_file`（真群文件），官方 API 只有聊天富媒体。
+
 ## 注意事项
 
 - **Linux 需要中文字体**。插件按 `msyh.ttc` → `wqy-zenhei.ttc` → `NotoSansCJK` → `PingFang` 顺序找字体，一个都没有时图中中文会变成方块（日志会警告）。Debian/Ubuntu：`apt install fonts-wqy-zenhei`。
