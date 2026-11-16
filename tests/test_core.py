@@ -7,9 +7,10 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
+from core import net  # noqa: E402
 from core.client import compute_rating, difficulty_name, grade_of  # noqa: E402
 from core.music import MusicLib  # noqa: E402
-from core.safe import safe_cell  # noqa: E402
+from core.safe import safe_cell, safe_error  # noqa: E402
 
 
 class TestSafeCell(unittest.TestCase):
@@ -21,6 +22,27 @@ class TestSafeCell(unittest.TestCase):
         self.assertEqual(safe_cell("abc"), "abc")
         self.assertEqual(safe_cell(5), 5)
         self.assertEqual(safe_cell(None), "")
+
+
+class TestSafeError(unittest.TestCase):
+    def test_path_masked(self):
+        msg = safe_error(ValueError("E:/secret/token.json 打不开"))
+        self.assertIn("[路径]", msg)
+        self.assertNotIn("secret", msg)
+
+    def test_token_masked(self):
+        self.assertIn("[凭证]", safe_error(ValueError("access_token 过期")))
+
+
+class TestHostAllowed(unittest.TestCase):
+    def test_allowed(self):
+        self.assertTrue(net.host_allowed("https://dancedemo.shenghuayule.com/x"))
+        self.assertTrue(net.host_allowed("https://thirdwx.qlogo.cn/a"))
+
+    def test_blocked(self):
+        self.assertFalse(net.host_allowed("http://dancedemo.shenghuayule.com/x"))
+        self.assertFalse(net.host_allowed("file:///C:/x"))
+        self.assertFalse(net.host_allowed("https://127.0.0.1/x"))
 
 
 class TestRating(unittest.TestCase):

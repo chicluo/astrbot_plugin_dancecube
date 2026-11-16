@@ -6,10 +6,10 @@
     "hint": "主人不受群白名单限制，可在任何会话使用全部指令。"
   },
   "allowed_groups": {
-    "description": "允许使用舞立方功能的群号列表",
+    "description": "允许使用舞立方功能的群标识列表",
     "type": "list",
     "default": [],
-    "hint": "把群号填进来即可放开该群；好友私聊不受此限制。群号可在群里发 /sid 查看。"
+    "hint": "aiocqhttp 填真实群号（群里发 /sid 可查）；qq_official 填 group_openid（形如 C0A...），填数字群号永远匹配不上。填 * 放开全部群。"
   },
   "allow_private": {
     "description": "允许好友私聊使用",

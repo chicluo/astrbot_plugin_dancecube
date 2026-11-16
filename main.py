@@ -9,7 +9,8 @@
   /导出成绩    —— 导出全部成绩为 xlsx（保存到管理员本机）
   /舞立方退出  —— 清除当前 QQ 的 token
 
-权限：好友私聊可用；群聊需群号在 allowed_groups 配置里。
+权限：好友私聊可用（仅 aiocqhttp）；群聊需群标识在 allowed_groups 配置里，
+      aiocqhttp 填真实群号，qq_official 填 group_openid。
 """
 import asyncio
 import json
@@ -48,6 +49,17 @@ def _safe_qq(qq: str) -> str:
     """QQ/openid 只保留安全字符，避免拼路径时被 ../ 之类带出去。"""
     return re.sub(r"[^A-Za-z0-9_-]", "_", str(qq or "user"))
 
+
+def _as_bool(value, default=False):
+    """配置可能被手改成字符串，bool("false") 是 True，必须显式解析。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ("1", "true", "yes", "on", "y")
+
 # 「/曲目 官谱全表」「/曲目 自制谱全表」：直接出 xlsx，不按曲名搜
 CATALOG_KEYS = {
     "官谱全表": "official",
@@ -80,7 +92,7 @@ class DanceCube(star.Star):
         self.config = config
         # 安全：默认校验证书；只有显式打开 insecure_tls 才退回旧行为
         try:
-            insecure = bool(config.get("insecure_tls", False))
+            insecure = _as_bool(config.get("insecure_tls"), False)
         except Exception:  # noqa: BLE001
             insecure = False
         net.set_verify_tls(not insecure)
@@ -127,7 +139,7 @@ class DanceCube(star.Star):
             return True  # 机器人主人：不受群白名单限制
         message_type = event.get_message_type()
         if message_type == MessageType.FRIEND_MESSAGE:
-            return bool(self.config.get("allow_private", True))
+            return _as_bool(self.config.get("allow_private"), True)
         if message_type == MessageType.GROUP_MESSAGE:
             groups = {
                 str(g).strip()
@@ -147,7 +159,7 @@ class DanceCube(star.Star):
             return False
         # 其它消息类型（官方机器人偶发的 OTHER_MESSAGE）按私聊处理
         if message_type == MessageType.OTHER_MESSAGE:
-            return bool(self.config.get("allow_private", True))
+            return _as_bool(self.config.get("allow_private"), True)
         return False
 
     def _token_path(self, qq: str) -> Path:
@@ -272,7 +284,7 @@ class DanceCube(star.Star):
             return
 
         qq = str(event.get_sender_id())
-        if self.config.get("login_admin_only", False):
+        if _as_bool(self.config.get("login_admin_only"), False):
             owner = str(self.config.get("owner_qq") or "").strip()
             if not owner or qq != owner:
                 yield event.plain_result("管理员开启了「仅管理员可登录」，请联系管理员。")
@@ -300,6 +312,11 @@ class DanceCube(star.Star):
         qr_path.write_bytes(png)
         timeout = int(self.config.get("qr_timeout_seconds", 120) or 120)
 
+        # 先把轮询任务挂上，再发消息：万一消费方提前结束迭代，登录流程也不会丢
+        self._pending[qq] = asyncio.create_task(
+            self._wait_login(event, qq, meta["id"], timeout)
+        )
+
         yield event.chain_result(
             [
                 Comp.Plain(
@@ -310,10 +327,6 @@ class DanceCube(star.Star):
                 ),
                 Comp.Image.fromFileSystem(str(qr_path)),
             ]
-        )
-
-        self._pending[qq] = asyncio.create_task(
-            self._wait_login(event, qq, meta["id"], timeout)
         )
 
     async def _notify(self, event: AstrMessageEvent, chain) -> None:
@@ -505,6 +518,16 @@ class DanceCube(star.Star):
             minutes = 30
         return max(1, minutes) * 60
 
+    def _catalog_age(self, path):
+        """缓存文件年龄（秒）；不存在或 0 字节返回 None。"""
+        try:
+            st = path.stat()
+            if st.st_size > 0:  # 0 字节说明上次写失败，不能复用
+                return time.time() - st.st_mtime
+        except OSError:
+            pass
+        return None
+
     def _build_catalog(self, kind):
         """生成全表文件，返回 (路径, 行数, 曲目数)。"""
         lib = self._music_lib()
@@ -520,26 +543,31 @@ class DanceCube(star.Star):
         label = "官谱全表" if kind == "official" else "自制谱全表"
         path = self._catalog_dir() / ("%s.xlsx" % kind)
 
-        async with self._catalog_lock:
-            age_sec = None
-            try:
-                st = path.stat()
-                if st.st_size > 0:  # 0 字节说明上次写失败，不能复用
-                    age_sec = time.time() - st.st_mtime
-            except OSError:
-                age_sec = None
-
-            if age_sec is not None and age_sec < self._catalog_ttl():
-                yield event.plain_result(
-                    "%s（%d 分钟前生成，直接复用）" % (label, int(age_sec // 60))
-                )
+        age_sec = self._catalog_age(path)
+        if age_sec is not None and age_sec < self._catalog_ttl():
+            yield event.plain_result(
+                "%s（%d 分钟前生成，直接复用）" % (label, int(age_sec // 60))
+            )
+        else:
+            yield event.plain_result("正在生成%s，请稍候…" % label)
+            rows = songs = None
+            err = None
+            # 锁只包「检查 + 生成」，yield 全在锁外
+            async with self._catalog_lock:
+                age_sec = self._catalog_age(path)
+                if age_sec is None or age_sec >= self._catalog_ttl():
+                    try:
+                        path, rows, songs = await asyncio.to_thread(
+                            self._build_catalog, kind
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        err = e
+            if err is not None:
+                yield event.plain_result("生成%s失败：%s" % (label, safe_error(err)))
+                return
+            if rows is None:
+                yield event.plain_result("%s（刚有人生成好，直接复用）" % label)
             else:
-                yield event.plain_result("正在生成%s，请稍候…" % label)
-                try:
-                    path, rows, songs = await asyncio.to_thread(self._build_catalog, kind)
-                except Exception as e:  # noqa: BLE001
-                    yield event.plain_result("生成%s失败：%s" % (label, safe_error(e)))
-                    return
                 extra = "，%d 首曲目" % songs if songs else ""
                 yield event.plain_result("%s已生成：%d 行%s" % (label, rows, extra))
 

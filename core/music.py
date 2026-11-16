@@ -13,6 +13,7 @@
 """
 import glob
 import json
+import threading
 
 import mutagen
 import os
@@ -22,6 +23,9 @@ import urllib.parse
 import urllib.request
 
 from . import net
+
+# 时长缓存的读-改-写要串行，否则并发探测会互相覆盖
+_WRITE_LOCK = threading.Lock()
 
 BASE = "https://dancedemo.shenghuayule.com"
 UA = (
@@ -271,12 +275,13 @@ class MusicLib:
         record["duration"] = dur
         try:
             p = os.path.join(os.path.dirname(str(self.cache_path)), "music_duration_user.json")
-            data = {}
-            if os.path.exists(p):
-                with open(p, encoding="utf-8") as f:
-                    data = json.load(f)
-            data[mid] = dur
-            _atomic_json(p, data)
+            with _WRITE_LOCK:  # 读-改-写串行，避免并发探测互相覆盖
+                data = {}
+                if os.path.exists(p):
+                    with open(p, encoding="utf-8") as f:
+                        data = json.load(f)
+                data[mid] = dur
+                _atomic_json(p, data)
             self._duration = None  # 下次重新加载
         except (OSError, ValueError):
             pass

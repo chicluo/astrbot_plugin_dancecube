@@ -30,6 +30,7 @@ import csv
 import json
 import os
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -46,6 +47,10 @@ except ImportError:  # 作为独立脚本运行（python core/client.py）
 
 BASE = os.environ.get("DC_BASE", "https://dancedemo.shenghuayule.com")
 HERE = os.path.dirname(os.path.abspath(__file__))
+# 缓存写到临时目录，插件目录只读（容器/只读挂载）时也能用
+CACHE_DIR = os.environ.get("DC_CACHE_DIR") or os.path.join(
+    tempfile.gettempdir(), "dancecube"
+)
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
@@ -229,9 +234,12 @@ class Player:
         return difficulty_name(lev, old)
 
     def info_raw(self):
-        """(HTTP 状态码, 原始响应)；状态码 0 表示网络层失败，调用方可据此区分。"""
-        return self.api.get("/Dance/api/User/GetInfo",
-                            {"userId": self.uid, "getNationRank": "true"})
+        """(HTTP 状态码, 原始响应)；成功时顺手填缓存，出图阶段不再重复请求。"""
+        st, d = self.api.get("/Dance/api/User/GetInfo",
+                             {"userId": self.uid, "getNationRank": "true"})
+        if isinstance(d, dict) and d.get("UserID"):
+            self._info = d
+        return st, d
 
     def info(self, force=False):
         """个人信息；接口异常时返回 dict（可能是 _error），不会崩。"""
@@ -316,19 +324,21 @@ class Player:
     def scores(self, force=False):
         """全量成绩：musicIndex 2..6 五类合并（官方唯一的全量入口）。
 
-        五个请求相互独立，线程池并发，比串行省约 2 秒。
+        3 个并发 + 每个请求后 0.15s 间隔，避开官方约 10 req/s 的限速。
         """
         if self._scores is not None and not force:
             return self._scores
         from concurrent.futures import ThreadPoolExecutor
 
         def fetch(cls):
-            return cls, self.api.get(
+            rep = self.api.get(
                 "/Dance/api/User/GetMyRankNew", {"musicIndex": str(cls)}
             )[1]
+            time.sleep(0.15)
+            return cls, rep
 
         out = []
-        with ThreadPoolExecutor(max_workers=5) as pool:
+        with ThreadPoolExecutor(max_workers=3) as pool:
             for cls, rep in pool.map(fetch, (2, 3, 4, 5, 6)):
                 if not isinstance(rep, list):
                     continue
@@ -366,7 +376,7 @@ class Player:
 
     def music_library(self, max_age_h=24):
         """曲库（950 首，含每谱面定数与物量）。本地缓存 24h，避免每次拉 480KB。"""
-        path = os.path.join(HERE, "out", "musiclib.json")
+        path = os.path.join(CACHE_DIR, "musiclib.json")
         if os.path.exists(path) and time.time() - os.path.getmtime(path) < max_age_h * 3600:
             try:
                 return json.load(open(path, encoding="utf-8"))

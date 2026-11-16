@@ -13,14 +13,15 @@ UA = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
-# 只允许从这些域下载（官方接口、微信二维码、OSS 头像/音频）
+# 只允许从这些域下载（官方接口、微信二维码、微信/QQ 头像、OSS 文件）
 _ALLOWED_HOSTS = (
     "shenghuayule.com",
     "mp.weixin.qq.com",
     "weixin.qq.com",
+    "qlogo.cn",
+    "qpic.cn",
     "aliyuncs.com",
     "myqcloud.com",
-    "qpic.cn",
 )
 
 _VERIFY = True

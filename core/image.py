@@ -325,6 +325,8 @@ def draw_section(d, y, title, sub, songs, row_h, top):
 def draw_history(d, y, h, hist):
     rounded(d, (M, y, W - M, y + h), 20, (255, 255, 255, 16))
     text(d, (M + 22, y + 16), "战力变化", font(F_BOLD, 25))
+    if not isinstance(hist, list):
+        hist = []  # 接口异常时可能是 dict，防御一层
     if not hist:
         text(d, (W // 2, y + h // 2), "暂无历史战力", font(F_REG, 22), fill=C_MUTED, anchor="mm")
         return y + h
