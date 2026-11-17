@@ -42,7 +42,7 @@ class PushStore:
         return any(t.get("umo") == umo and t.get("enabled") for t in self.targets())
 
     def set_enabled(self, umo, enabled):
-        """开启/关闭某个会话；关闭时返回是否本来就在开。"""
+        """开启/关闭某个会话；返回目标是否存在（关闭不存在的目标返回 False）。"""
         umo = (umo or "").strip()
         if not umo:
             return False
@@ -53,7 +53,7 @@ class PushStore:
                 t["enabled"] = bool(enabled)
                 t["updated_at"] = int(time.time())
                 self._save(data)
-                return bool(enabled)
+                return True
         if not enabled:
             return False
         targets.append({"umo": umo, "enabled": True, "added_at": int(time.time())})

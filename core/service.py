@@ -748,14 +748,15 @@ class DanceCubeService:
 
     async def _push_pending(self):
         """把早八该发的变更推给所有已开启的会话，推完即清。"""
-        pending = self._push.take_pending()
-        if not pending:
-            return
         if not self.notifier:
             self.logger.warning("[dancecube] 没有配置 notifier，曲库更新无法推送")
             return
+        pending = self._push.take_pending()
+        if not pending:
+            return
         text = self._format_changes(pending)
         targets = self._push.enabled_targets()
+        failed = 0
         for t in targets:
             umo = str(t.get("umo") or "").strip()
             if not umo:
@@ -763,7 +764,13 @@ class DanceCubeService:
             try:
                 await self.notifier(RequestContext(user_id="", origin=umo), [Text(text)])
             except Exception as e:  # noqa: BLE001
+                failed += 1
                 self.logger.warning("[dancecube] 推送失败（%s）：%s", umo, e)
+        if targets and failed == len(targets):
+            # 全部失败：保留变更，下次早八再试，避免一口气全丢
+            self._push.save_pending(pending)
+            self.logger.warning("[dancecube] 全部推送失败，变更保留到下次")
+            return
         self.logger.info("[dancecube] 曲库更新已推送到 %d 个会话", len(targets))
 
     def terminate(self):
