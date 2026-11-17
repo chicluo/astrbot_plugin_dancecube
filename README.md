@@ -87,6 +87,14 @@ Koishi / Yunzai 这类非 Python 框架，建议把 core 包一层 FastAPI 当 H
 > **初次部署请用不常用的小号，不要用主力账号。**
 
 
+## 开发花销
+
+从 2026-11-13 动工到 2026-11-18 02:30，累计约 **¥29.0**（DeepSeek 峰谷价估算，含联网工具）：
+
+- 会话 260 轮 / 2371 次请求
+- 模型 ¥28.67 ＝ 高峰 ¥0.17 ＋ 空闲 ¥28.51；联网工具 ¥0.32
+- 口径：按 `dsh-cost.js` 价目表估算，官方按缓存折扣实扣通常更低；每次发版前用 `node dsh-cost.js cost --session <id>` 更新本节
+
 ## 许可证
 
 [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) —— **禁止商业使用**。
