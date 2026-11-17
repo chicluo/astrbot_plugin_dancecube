@@ -1,3 +1,5 @@
+> 已入驻爱发电：https://ifdian.net/a/chicluo
+
 (本插件全程由Deepseek-V4.1-Flash编译，就连这个说明也是)
 
 (如需体验请加Q群566567000)
