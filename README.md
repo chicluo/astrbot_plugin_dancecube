@@ -1,36 +1,45 @@
-> 已入驻爱发电：https://ifdian.net/a/chicluo
+<div align="center">
 
-(本插件全程由Deepseek-V4.1-Flash编译，就连这个说明也是)
-
-(如需体验请加Q群566567000)
+<img src="logo.png" width="120" alt="舞小鲸" />
 
 # 舞小鲸 · 舞立方查询
 
-> **License**：[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) —— 禁止商业使用，不提供商业授权。
+**查分、曲库、成绩导出，一条指令搞定。**
 
-查询舞立方玩家信息、B15/R15 战力分析图、导出全部成绩、扫码登录。
+[![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-1f6feb)](https://polyformproject.org/licenses/noncommercial/1.0.0)
+[![Version](https://img.shields.io/badge/version-1.0.0-2ea043)](https://github.com/chicluo/astrbot_plugin_dancecube)
+[![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.9.2-6f42c1)](https://github.com/AstrBotDevs/AstrBot)
+[![Platform](https://img.shields.io/badge/QQ-aiocqhttp%20%7C%20qq__official-4f9cf9)]()
 
-> 「舞小鲸」＝舞立方 ＋ DeepSeek 的鲸：整个插件由 DeepSeek 编写，它只是换个名字游过来。
+</div>
+
+> 「舞小鲸」＝舞立方 ＋ DeepSeek 的鲸：整个插件由 DeepSeek 编写，连这份说明也是——它只是换个名字游过来。
+>
+> 已入驻爱发电：<https://ifdian.net/a/chicluo> ｜ 体验群：**566567000**
 
 ## 功能
 
-- `/舞立方登录 —— 扫码绑定舞立方账号`
-- `/mydc —— 个人信息图（积分 / 全连率 / 排名 / 金币 / 天梯）`
-- `/myrt —— B15 + R15 战力分析图`
-- `/myrtb30 / /myrtap30 —— B30 / AP30 战力分析图`
-- `/曲目 <曲名或ID> —— 曲库查询：音乐ID / 定数 / 物量 / 时长 / 比特率`
-- `/曲目 官谱全表 —— 导出官谱全表 xlsx（每个谱面一行）`
-- `/曲目 自制谱全表 —— 导出自制谱全表 xlsx（每个商品一行）`
-- `/导出成绩 —— 导出全部成绩为 xlsx`
-- `/曲目推送 开|关|状态 —— 谱面更新推送：每天 08:00 有新增/下架时通知（开关仅主控可用）`
-- `/舞立方退出 —— 清除登录凭证`
+| 指令 | 作用 |
+|---|---|
+| `/舞立方登录` | 扫码绑定舞立方账号 |
+| `/mydc` | 个人信息图（积分 / 全连率 / 排名 / 金币 / 天梯） |
+| `/myrt` | B15 + R15 战力分析图 |
+| `/myrtb30` / `/myrtap30` | B30 / AP30 战力分析图 |
+| `/曲目 <曲名或ID>` | 曲库查询：音乐ID / 定数 / 物量 / 时长 / 比特率 |
+| `/曲目 官谱全表` | 导出官谱全表 xlsx（每个谱面一行） |
+| `/曲目 自制谱全表` | 导出自制谱全表 xlsx（每个商品一行） |
+| `/导出成绩` | 导出全部成绩为 xlsx |
+| `/曲目推送 开` / `关` / `状态` | 谱面更新推送：每天 08:00 有新增/下架时通知（开关仅主控可用） |
+| `/舞立方退出` | 清除登录凭证 |
 
-## 安装
+## 快速开始
 
-1. 安装 [AstrBot](https://github.com/AstrBotDevs/AstrBot)
-2. 把本目录放到 `data/plugins/` 下
-3. 安装依赖：`pip install -r requirements.txt`（如果有）
-4. 在 AstrBot 面板里填写配置
+1. 安装 [AstrBot](https://github.com/AstrBotDevs/AstrBot)（建议 ≥ 4.9.2）
+2. 把本目录放进 `data/plugins/`
+3. 安装依赖：`pip install -r requirements.txt`
+4. 在面板里填好 `owner_qq` 和 `export_dir`，到群里发 `/舞立方登录`
+
+> ⚠️ **初次部署请用不常用的小号**：插件会调用官方接口拉曲库与成绩，存在被风控甚至封禁的风险；测试期间没遇到，但不代表不会发生。
 
 ## 配置
 
@@ -78,16 +87,7 @@ Koishi / Yunzai 这类非 Python 框架，建议把 core 包一层 FastAPI 当 H
 - 插件自带一份曲库快照（`data/*.json`，约 3.7 MB），首次部署时自动复制到 `plugin_data`，不用等全量拉取；数据过期后会在 24 小时内自动刷新。
 - **曲库快照也可以不用**：删掉 `data/` 目录后，插件会按原流程从官方接口拉取（官谱约 1 秒、自制谱约 1 分钟），前提是已经有人 `/舞立方登录` 过——拉取要借用一个已登录用户的 token。
 - 难度标签：`[初]` / `[中]` / `[高]` 经典三档，`[秀]` 舞立方秀专属，`[S+]` show+ 谱。
-
----
-
-> ## ⚠️ 重要：请务必用一个不常用的号登录
->
-> 插件会调用官方接口拉取全曲库、成绩等数据，**存在账号被风控甚至封禁的风险**。
-> 测试期间没有遇到，但不代表不会发生。
->
-> **初次部署请用不常用的小号，不要用主力账号。**
-
+- 谱面更新推送的检测在凌晨 03:00–05:00 随定时刷新进行，**08:00 才发**，不会半夜扰人；状态存在 `plugin_data/astrbot_plugin_dancecube/push_targets.json`。
 
 ## 开发花销
 
