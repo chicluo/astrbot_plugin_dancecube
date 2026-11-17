@@ -76,8 +76,8 @@ def export_scores(player, out_dir=DEFAULT_EXPORT_DIR):
             int(s.get("miss") or 0),
             int(s.get("combo") or 0),
             int(s.get("rating") or 0),
-            safe_cell(s.get("grade") or "-"),
-            safe_cell(s.get("time") or "-"),
+            safe_cell(s.get("grade") or ""),
+            safe_cell(s.get("time") or ""),
             "官谱" if int(s.get("ownerType") or 0) == 1 else "自制谱",
         ])
 
