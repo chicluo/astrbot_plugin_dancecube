@@ -334,6 +334,13 @@ class MusicLib:
     def _user_path(self):
         return str(self.cache_path).replace(".json", "_user.json")
 
+    # 供外部读取缓存快照（不做加载、不发请求）
+    def official_path(self):
+        return self._official_path()
+
+    def user_path(self):
+        return self._user_path()
+
     def load_official(self):
         """有缓存就直接用，不管多旧——过期数据交给定时任务刷新。
 

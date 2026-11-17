@@ -170,3 +170,10 @@ class DanceCube(star.Star):
     async def dc_xlsx(self, event: AstrMessageEvent):
         async for r in self._emit(event, self.service.export(self._ctx(event))):
             yield r
+
+    @filter.command("曲目推送", alias={"谱面推送", "订阅谱面"})
+    async def dc_push(self, event: AstrMessageEvent, arg: str = ""):
+        async for r in self._emit(
+            event, self.service.push_toggle(self._ctx(event), arg)
+        ):
+            yield r

@@ -31,6 +31,7 @@ from . import net
 from .client import Player
 from .export import DEFAULT_EXPORT_DIR, export_scores
 from .profile_image import build_info
+from .push import PushStore
 from .safe import safe_error
 
 PLUGIN_NAME = "astrbot_plugin_dancecube"
@@ -136,6 +137,7 @@ class DanceCubeService:
         self._mlib = None
         self._warned_openid = False
         self._sched_task = None
+        self._push = PushStore(str(self.data_dir / "push_targets.json"))
         self._ensure_music_cache(bundled_data_dir)
         self._check_config()
 
@@ -570,6 +572,38 @@ class DanceCubeService:
         self.logger.info("成绩导出：%s（角色 %s）%d 条 -> %s", name, role_id, n, path)
         yield File(str(path), Path(path).name, )
 
+    # ------------------------------------------------------------ 谱面推送
+    def _is_owner(self, ctx: RequestContext) -> bool:
+        owner = str(self.config.get("owner_qq") or "").strip()
+        return bool(owner) and ctx.user_id == owner
+
+    async def push_toggle(self, ctx: RequestContext, arg: str = ""):
+        """打开/关闭/查看本群的谱面更新推送（开关仅主控可用）。"""
+        low = (arg or "").strip().lower()
+        if low in ("开", "on", "开启", "打开", "订阅"):
+            if not self._is_owner(ctx):
+                yield Text("只有主控可以开启谱面推送。")
+                return
+            if not ctx.origin:
+                yield Text("拿不到会话标识，开启失败。")
+                return
+            self._push.set_enabled(ctx.origin, True)
+            yield Text("已开启谱面更新推送：每天 08:00 有更新时发送到这里。")
+            return
+        if low in ("关", "off", "关闭", "退订"):
+            if not self._is_owner(ctx):
+                yield Text("只有主控可以关闭谱面推送。")
+                return
+            if self._push.set_enabled(ctx.origin, False):
+                yield Text("已关闭谱面更新推送。")
+            else:
+                yield Text("这里本来就没开推送。")
+            return
+        if self._push.is_enabled(ctx.origin):
+            yield Text("本群已开启谱面更新推送（每天 08:00，有更新才发）。")
+        else:
+            yield Text("本群未开启谱面更新推送。主控可用「/曲目推送 开」开启。")
+
     # ------------------------------------------------------------ 生命周期
     def _ensure_music_cache(self, bundled_dir):
         if not bundled_dir:
@@ -617,24 +651,31 @@ class DanceCubeService:
             target = base + timedelta(days=1) + timedelta(minutes=random.randint(0, 120))
         return max(60.0, (target - now).total_seconds())
 
+    def _seconds_until_push(self) -> float:
+        """距离下一个 08:00 推送点的秒数。"""
+        now = datetime.now()
+        target = now.replace(hour=8, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return max(30.0, (target - now).total_seconds())
+
     async def _scheduler_loop(self):
         while True:
             try:
-                delay = self._next_refresh_delay()
-                self.logger.info(
-                    "[dancecube] 下一次曲库刷新在 %.1f 小时后", delay / 3600
-                )
-                await asyncio.sleep(delay)
-                await self._refresh_libraries()
+                await asyncio.sleep(self._next_refresh_delay())
+                await self._refresh_libraries()  # 只检测，把变更写进 pending
+                await asyncio.sleep(self._seconds_until_push())  # 等早八
+                await self._push_pending()  # 统一推给已开启的会话
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
-                self.logger.warning("[dancecube] 定时刷新异常：%s", e)
+                self.logger.warning("[dancecube] 定时任务异常：%s", e)
                 await asyncio.sleep(600)
 
     async def _refresh_libraries(self):
-        """官谱先刷，成功后刷自制谱；失败每 30 分钟重试直到成功。"""
+        """官谱先刷、再刷自制谱；刷新前后各拍一次快照，差异记入 pending。"""
         lib = self._music_lib()
+        old = await asyncio.to_thread(self._snapshot, lib)
         ok = await asyncio.to_thread(lib.refresh_official)
         while not ok:
             self.logger.warning("[dancecube] 官谱定时刷新失败，30 分钟后重试")
@@ -648,6 +689,82 @@ class DanceCubeService:
             await asyncio.sleep(30 * 60)
             ok = await asyncio.to_thread(lib.refresh_user)
         self.logger.info("[dancecube] 自制谱已定时刷新")
+
+        new = await asyncio.to_thread(self._snapshot, lib)
+        self._record_changes(old, new)
+
+    @staticmethod
+    def _snapshot(lib) -> dict:
+        """直接读缓存文件得到 {MusicID: 曲名}，不触发加载或请求。"""
+        out = {}
+        for key, path in (("official", lib.official_path()), ("user", lib.user_path())):
+            items = {}
+            try:
+                with open(path, encoding="utf-8") as f:
+                    for x in json.load(f):
+                        if not isinstance(x, dict):
+                            continue
+                        mid = str(x.get("MusicID") or x.get("musicId") or "")
+                        if mid:
+                            items[mid] = str(x.get("Name") or x.get("name") or mid)
+            except (OSError, ValueError):
+                pass
+            out[key] = items
+        return out
+
+    def _record_changes(self, old, new):
+        changes = {}
+        for key in ("official", "user"):
+            o, n = old.get(key) or {}, new.get(key) or {}
+            changes[key + "_new"] = [n[k] for k in n if k not in o]
+            changes[key + "_gone"] = [o[k] for k in o if k not in n]
+        if not any(changes.values()):
+            return
+        changes["date"] = datetime.now().strftime("%Y-%m-%d")
+        self._push.save_pending(changes)
+        self.logger.info(
+            "[dancecube] 曲库变更：官谱 +%d/-%d，自制谱 +%d/-%d（等 08:00 推送）",
+            len(changes["official_new"]),
+            len(changes["official_gone"]),
+            len(changes["user_new"]),
+            len(changes["user_gone"]),
+        )
+
+    @staticmethod
+    def _format_changes(pending) -> str:
+        date = str(pending.get("date") or "")[5:] or datetime.now().strftime("%m-%d")
+        lines = ["【舞立方 · 曲库更新 %s】" % date]
+        for key, label in (
+            ("official_new", "官谱新增"),
+            ("official_gone", "官谱下架"),
+            ("user_new", "自制谱新增"),
+            ("user_gone", "自制谱下架"),
+        ):
+            items = pending.get(key) or []
+            if items:
+                lines.append("%s %d 首：%s" % (label, len(items), "、".join(items)))
+        lines.append("完整列表：/曲目 官谱全表")
+        return "\n".join(lines)
+
+    async def _push_pending(self):
+        """把早八该发的变更推给所有已开启的会话，推完即清。"""
+        pending = self._push.take_pending()
+        if not pending:
+            return
+        if not self.notifier:
+            self.logger.warning("[dancecube] 没有配置 notifier，曲库更新无法推送")
+            return
+        text = self._format_changes(pending)
+        targets = self._push.enabled_targets()
+        for t in targets:
+            umo = str(t.get("umo") or "").strip()
+            if not umo:
+                continue
+            try:
+                await self.notifier(RequestContext(user_id="", origin=umo), [Text(text)])
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("[dancecube] 推送失败（%s）：%s", umo, e)
+        self.logger.info("[dancecube] 曲库更新已推送到 %d 个会话", len(targets))
 
     def terminate(self):
         if self._sched_task is not None:
