@@ -48,6 +48,7 @@ class DanceCube(star.Star):
             notifier=self._notify,
             logger=self.logger,
         )
+        self.service.start()
 
     # ------------------------------------------------------------ 翻译层
     def _platform(self, event: AstrMessageEvent) -> str:

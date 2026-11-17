@@ -321,59 +321,91 @@ class MusicLib:
         raise last_err if last_err else RuntimeError("曲库请求失败")
 
     # ---------------------------------------------------------- 官谱
+    def _official_path(self):
+        return str(self.cache_path)
+
+    def _user_path(self):
+        return str(self.cache_path).replace(".json", "_user.json")
+
     def load_official(self):
+        """有缓存就直接用，不管多旧——过期数据交给定时任务刷新。
+
+        这样长时间没查曲目后第一次搜索也不会卡在接口请求上。
+        """
         if self._official is not None:
             return self._official
-        path = str(self.cache_path)
-        if os.path.exists(path) and time.time() - os.path.getmtime(path) < OFFICIAL_TTL:
+        path = self._official_path()
+        if os.path.exists(path):
             try:
                 with open(path, encoding="utf-8") as f:
                     self._official = [_norm_official(x) for x in json.load(f)]
                 return self._official
             except (OSError, ValueError):
                 pass
-        songs = self._fetch("/Dance/MusicData/GetValidMusicList")
-        if not isinstance(songs, list):
+        if not self.refresh_official():
             raise RuntimeError("官谱接口返回异常")
-        self._official = [_norm_official(x) for x in songs]
-        _atomic_json(path, songs)
         return self._official
+
+    def refresh_official(self):
+        """强制重拉官谱并写盘，成功返回 True（定时任务用）。"""
+        try:
+            songs = self._fetch("/Dance/MusicData/GetValidMusicList")
+        except Exception:  # noqa: BLE001
+            return False
+        if not isinstance(songs, list) or len(songs) < 500:
+            return False  # 接口异常返回残缺数据时不要覆盖好缓存
+        self._official = [_norm_official(x) for x in songs]
+        _atomic_json(self._official_path(), songs)
+        return True
 
     # ---------------------------------------------------------- 自制谱
     def load_user(self, force=False):
+        """有缓存就直接用；force=True 时同步重拉（定时任务用）。"""
         if self._user is not None and not force:
             return self._user
         with _LOAD_LOCK:  # 全量拉取约 56 秒，并发请求只让一个真的去拉
             if self._user is not None and not force:
                 return self._user
-            path = str(self.cache_path).replace(".json", "_user.json")
+            path = self._user_path()
             if not force and os.path.exists(path):
-                if time.time() - os.path.getmtime(path) < USER_TTL:
-                    try:
-                        with open(path, encoding="utf-8") as f:
-                            self._user = json.load(f)
-                        return self._user
-                    except (OSError, ValueError):
-                        pass
-            items, page, total = [], 1, 0
-            while page <= 30:
-                d = self._fetch(
-                    "/Dance/api/Goods/GetGoodsMusic",
-                    {"page": page, "pagesize": 1000, "orderby": 3, "ordertype": 2},
-                )
-                lst = (d or {}).get("List") or []
-                if not lst:
-                    break
-                items.extend(_norm_user(x) for x in lst)
-                total = int((d or {}).get("RecordCount") or 0)
-                # RecordCount 缺失或为 0 时继续翻，直到拿到空页为止
-                if total > 0 and len(items) >= total:
-                    break
-                page += 1
-                time.sleep(0.3)
-            self._user = items
-            _atomic_json(path, items)
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        self._user = json.load(f)
+                    return self._user
+                except (OSError, ValueError):
+                    pass
+            if not self._fetch_user(path):
+                raise RuntimeError("自制谱接口拉取失败")
             return self._user
+
+    def refresh_user(self):
+        """强制重拉自制谱并写盘，成功返回 True（定时任务用）。"""
+        with _LOAD_LOCK:
+            return self._fetch_user(self._user_path())
+
+    def _fetch_user(self, path):
+        """翻页拉取自制谱（调用方负责加锁）。"""
+        items, page, total = [], 1, 0
+        while page <= 30:
+            d = self._fetch(
+                "/Dance/api/Goods/GetGoodsMusic",
+                {"page": page, "pagesize": 1000, "orderby": 3, "ordertype": 2},
+            )
+            lst = (d or {}).get("List") or []
+            if not lst:
+                break
+            items.extend(_norm_user(x) for x in lst)
+            total = int((d or {}).get("RecordCount") or 0)
+            # RecordCount 缺失或为 0 时继续翻，直到拿到空页为止
+            if total > 0 and len(items) >= total:
+                break
+            page += 1
+            time.sleep(0.3)
+        if not items or len(items) < 1000:
+            return False  # 翻页异常拿到的残缺数据不要覆盖好缓存
+        self._user = items
+        _atomic_json(path, items)
+        return True
 
     # ---------------------------------------------------------- 检索
     def _search(self, records, keyword):

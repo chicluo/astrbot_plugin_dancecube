@@ -14,10 +14,12 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import catalog as dc_catalog
@@ -133,6 +135,7 @@ class DanceCubeService:
         self._catalog_lock = asyncio.Lock()
         self._mlib = None
         self._warned_openid = False
+        self._sched_task = None
         self._ensure_music_cache(bundled_data_dir)
         self._check_config()
 
@@ -589,7 +592,67 @@ class DanceCubeService:
             )
         return self._mlib
 
+    # ------------------------------------------------------------ 定时刷新
+    def start(self):
+        """启动曲库定时刷新（需要运行中的事件循环，插件初始化时调用）。"""
+        if self._sched_task is not None and not self._sched_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.logger.warning("[dancecube] 没有运行中的事件循环，跳过定时刷新")
+            return
+        self._sched_task = loop.create_task(self._scheduler_loop())
+        self.logger.info("[dancecube] 曲库定时刷新已启动（每天 03:00-05:00 随机时刻）")
+
+    def _next_refresh_delay(self) -> float:
+        """距离下一次 03:00-05:00 随机时刻的秒数。"""
+        now = datetime.now()
+        base = now.replace(hour=3, minute=0, second=0, microsecond=0)
+        target = base + timedelta(minutes=random.randint(0, 120))
+        if target <= now:
+            target = base + timedelta(days=1) + timedelta(minutes=random.randint(0, 120))
+        return max(60.0, (target - now).total_seconds())
+
+    async def _scheduler_loop(self):
+        while True:
+            try:
+                delay = self._next_refresh_delay()
+                self.logger.info(
+                    "[dancecube] 下一次曲库刷新在 %.1f 小时后", delay / 3600
+                )
+                await asyncio.sleep(delay)
+                await self._refresh_libraries()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("[dancecube] 定时刷新异常：%s", e)
+                await asyncio.sleep(600)
+
+    async def _refresh_libraries(self):
+        """官谱先刷，成功后刷自制谱；失败每 30 分钟重试直到成功。"""
+        lib = self._music_lib()
+        ok = await asyncio.to_thread(lib.refresh_official)
+        while not ok:
+            self.logger.warning("[dancecube] 官谱定时刷新失败，30 分钟后重试")
+            await asyncio.sleep(30 * 60)
+            ok = await asyncio.to_thread(lib.refresh_official)
+        self.logger.info("[dancecube] 官谱已定时刷新")
+
+        ok = await asyncio.to_thread(lib.refresh_user)
+        while not ok:
+            self.logger.warning("[dancecube] 自制谱定时刷新失败，30 分钟后重试")
+            await asyncio.sleep(30 * 60)
+            ok = await asyncio.to_thread(lib.refresh_user)
+        self.logger.info("[dancecube] 自制谱已定时刷新")
+
     def terminate(self):
+        if self._sched_task is not None:
+            try:
+                self._sched_task.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+            self._sched_task = None
         for task in list(self._pending.values()):
             try:
                 task.cancel()
