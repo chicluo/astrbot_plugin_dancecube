@@ -1,5 +1,7 @@
 (本插件全程由Deepseek-V4.1-Flash编译，就连这个说明也是)
 
+(如需体验请加Q群566567000)
+
 # 舞立方查询
 
 > **License**：[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) —— 禁止商业使用，不提供商业授权。
