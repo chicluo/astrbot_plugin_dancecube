@@ -463,6 +463,9 @@ class DanceCubeService:
             yield Text("曲库查询失败：%s" % safe_error(e))
             return
         if not hits:
+            if getattr(lib, "last_busy", False):
+                yield Text("曲库正在全量拉取中，请过 3 分钟再试。")
+                return
             yield Text("曲库里没有找到含\u300c%s\u300d的曲子。" % name)
             return
         if len(hits) == 1:

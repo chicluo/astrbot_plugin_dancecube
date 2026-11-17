@@ -29,6 +29,12 @@ from . import net
 _WRITE_LOCK = threading.Lock()
 # 自制谱全量拉取约 56 秒，并发请求只让一个真的去拉
 _LOAD_LOCK = threading.Lock()
+# 官谱刷新用独立锁，避免和自制谱互相卡住
+_OFFICIAL_LOCK = threading.Lock()
+
+
+class LibraryBusy(RuntimeError):
+    """曲库正在后台全量拉取，暂时没有可用缓存。"""
 
 BASE = "https://dancedemo.shenghuayule.com"
 UA = (
@@ -225,6 +231,7 @@ class MusicLib:
         self._official = None
         self._user = None
         self._duration = None
+        self.last_busy = False
 
     def load_duration(self):
         """曲目时长表（musicId → 秒），官谱和自制谱合并。"""
@@ -348,25 +355,44 @@ class MusicLib:
 
     def refresh_official(self):
         """强制重拉官谱并写盘，成功返回 True（定时任务用）。"""
+        if not _OFFICIAL_LOCK.acquire(blocking=False):
+            return False  # 已有线程在拉
         try:
             songs = self._fetch("/Dance/MusicData/GetValidMusicList")
         except Exception:  # noqa: BLE001
             return False
+        finally:
+            _OFFICIAL_LOCK.release()
         if not isinstance(songs, list) or len(songs) < 500:
             return False  # 接口异常返回残缺数据时不要覆盖好缓存
         self._official = [_norm_official(x) for x in songs]
         _atomic_json(self._official_path(), songs)
         return True
 
+    def busy(self):
+        """是否有线程正在全量拉取。"""
+        return _LOAD_LOCK.locked() or _OFFICIAL_LOCK.locked()
+
     # ---------------------------------------------------------- 自制谱
     def load_user(self, force=False):
-        """有缓存就直接用；force=True 时同步重拉（定时任务用）。"""
+        """有缓存就直接用；正在拉取时用旧缓存或抛 LibraryBusy，不阻塞查询。"""
         if self._user is not None and not force:
             return self._user
-        with _LOAD_LOCK:  # 全量拉取约 56 秒，并发请求只让一个真的去拉
+        path = self._user_path()
+        if not _LOAD_LOCK.acquire(blocking=False):
+            # 别的线程正在全量拉取：能用旧缓存就用，没有就告诉调用方稍后再试
+            self.last_busy = True
+            if os.path.exists(path):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        self._user = json.load(f)
+                    return self._user
+                except (OSError, ValueError):
+                    pass
+            raise LibraryBusy("自制谱正在拉取")
+        try:
             if self._user is not None and not force:
                 return self._user
-            path = self._user_path()
             if not force and os.path.exists(path):
                 try:
                     with open(path, encoding="utf-8") as f:
@@ -374,9 +400,12 @@ class MusicLib:
                     return self._user
                 except (OSError, ValueError):
                     pass
+            self.last_busy = True
             if not self._fetch_user(path):
                 raise RuntimeError("自制谱接口拉取失败")
             return self._user
+        finally:
+            _LOAD_LOCK.release()
 
     def refresh_user(self):
         """强制重拉自制谱并写盘，成功返回 True（定时任务用）。"""
@@ -438,14 +467,19 @@ class MusicLib:
                 if hits:
                     self.last_raw_total = len(hits)
                     return self._attach_duration([self.enrich_user(r) for r in hits[:limit]])
+        self.last_busy = False
         out = []
         try:
             out.extend(self._search(self.load_official(), text))
+        except LibraryBusy:
+            self.last_busy = True
         except Exception:  # noqa: BLE001
             pass
         try:
             # 官谱和自制谱都查：同名时两条都返回，让用户自己挑
             out.extend(self._search(self.load_user(), text))
+        except LibraryBusy:
+            self.last_busy = True
         except Exception:  # noqa: BLE001
             pass
         self.last_raw_total = len(out)
