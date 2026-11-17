@@ -4,11 +4,13 @@
 
 (如需体验请加Q群566567000)
 
-# 舞立方查询
+# 舞小鲸 · 舞立方查询
 
 > **License**：[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) —— 禁止商业使用，不提供商业授权。
 
 查询舞立方玩家信息、B15/R15 战力分析图、导出全部成绩、扫码登录。
+
+> 「舞小鲸」＝舞立方 ＋ DeepSeek 的鲸：整个插件由 DeepSeek 编写，它只是换个名字游过来。
 
 ## 功能
 
