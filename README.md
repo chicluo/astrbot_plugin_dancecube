@@ -90,6 +90,8 @@ Koishi / Yunzai 这类非 Python 框架，建议把 core 包一层 FastAPI 当 H
 
 > 说明：2026-11-17 之前以 MIT 发布的版本仍按当时的 MIT 授权，从本次变更（commit「docs: 许可证改为 PolyForm Noncommercial」）之后的版本起适用上述许可证。
 
+> 依赖许可：Pillow（MIT-CMU）、openpyxl（MIT）、tinytag（MIT），均为宽松许可，与本项目许可证不冲突，打包分发也不会引入传染性条款。（早期版本用的 mutagen 是 GPL-2.0-or-later，已替换。）
+
 ## 免责声明
 
 - 本插件仅供学习交流，不得用于商业用途。

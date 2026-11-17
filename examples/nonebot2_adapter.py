@@ -6,7 +6,7 @@
 用法：
 1. 把整个 `astrbot_plugin_dancecube` 目录放到 NoneBot2 项目能找到的位置
    （比如 `bot_project/vendor/astrbot_plugin_dancecube/`）；
-2. 安装依赖：`pip install pillow openpyxl mutagen`；
+2. 安装依赖：`pip install pillow openpyxl tinytag`；
 3. 把本文件复制成 `nonebot_plugin_dancecube/__init__.py`，按注释改
    `REPO_PARENT` 和 `DATA_DIR`；
 4. 启动 NoneBot2。

@@ -15,12 +15,13 @@ import glob
 import json
 import threading
 
-import mutagen
 import os
 import re
 import time
 import urllib.parse
 import urllib.request
+
+from tinytag import TinyTag
 
 from . import net
 
@@ -196,13 +197,17 @@ def _probe_audio(url):
     """下载音频读一次时长（按需兜底，约 1 秒）。只允许白名单域名，上限 64MB。"""
     import tempfile
 
-    fd, path = tempfile.mkstemp(suffix=".bin")
+    # tinytag 按扩展名挑解析器，临时文件要带上原扩展名
+    suffix = os.path.splitext(urllib.parse.urlsplit(url).path)[1].lower()
+    if suffix not in (".mp3", ".m4a", ".mp4", ".ogg", ".flac", ".wav", ".wma"):
+        suffix = ".mp3"
+    fd, path = tempfile.mkstemp(suffix=suffix)
     os.close(fd)
     try:
         net.download_file(url, path, max_bytes=64 << 20, timeout=60)
-        m = mutagen.File(path)
-        if m is not None and getattr(m, "info", None):
-            return round(float(m.info.length), 1)
+        tag = TinyTag.get(path)
+        if tag is not None and tag.duration:
+            return round(float(tag.duration), 1)
     except Exception:  # noqa: BLE001
         return None
     finally:
