@@ -44,7 +44,7 @@ def _disp_width(value):
 def export_scores(player, out_dir=DEFAULT_EXPORT_DIR):
     """生成 xlsx，返回 (路径, 行数, 玩家名, 角色ID)。文件名「<角色ID>全部成绩<时间>.xlsx」。"""
     if not out_dir or not str(out_dir).strip():
-        raise RuntimeError("管理员还没配置 export_dir，请联系管理员")
+        raise RuntimeError("导出目录未指定")
     scores = player.scores() or []
     if not scores:
         raise RuntimeError("没有可导出的成绩")

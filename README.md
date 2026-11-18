@@ -7,7 +7,7 @@
 **查分、曲库、成绩导出，一条指令搞定。**
 
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-1f6feb)](https://polyformproject.org/licenses/noncommercial/1.0.0)
-[![Version](https://img.shields.io/badge/version-1.0.0-2ea043)](https://github.com/chicluo/astrbot_plugin_dancecube)
+[![Version](https://img.shields.io/badge/version-1.0.1-2ea043)](https://github.com/chicluo/astrbot_plugin_dancecube)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.9.2-6f42c1)](https://github.com/AstrBotDevs/AstrBot)
 [![Platform](https://img.shields.io/badge/QQ-aiocqhttp%20%7C%20qq__official-4f9cf9)]()
 
@@ -37,7 +37,7 @@
 1. 安装 [AstrBot](https://github.com/AstrBotDevs/AstrBot)（建议 ≥ 4.9.2）
 2. 把本目录放进 `data/plugins/`
 3. 安装依赖：`pip install -r requirements.txt`
-4. 在面板里填好 `owner_qq` 和 `export_dir`，到群里发 `/舞立方登录`
+4. 在面板里填好 `owner_qq`（`export_dir` 可留空），到群里发 `/舞立方登录`
 
 > ⚠️ **初次部署请用不常用的小号**：插件会调用官方接口拉曲库与成绩，存在被风控甚至封禁的风险；测试期间没遇到，但不代表不会发生。
 
@@ -48,10 +48,10 @@
 | `owner_qq` | 机器人主人 QQ |
 | `allowed_groups` | 允许使用的群标识，填 `*` 表示全部。**aiocqhttp 填真实群号；qq_official 填 group_openid**（形如 `C0A...`） |
 | `allow_private` | 允许好友私聊使用（仅 aiocqhttp 有效，官方个人开发者没有 C2C 私聊权限） |
-| `export_dir` | 成绩导出的本机目录（必须填） |
+| `export_dir` | 成绩导出目录，可留空：留空时用 `plugin_data/astrbot_plugin_dancecube/export/`；填自定义路径时必须在该数据目录内，否则忽略 |
 | `catalog_ttl_minutes` | 曲库全表缓存分钟数，默认 30 |
 | `qr_timeout_seconds` | 扫码登录超时秒数 |
-| `insecure_tls` | 关闭 HTTPS 证书校验，默认 `false`（不推荐） |
+| `insecure_tls` | 关闭 HTTPS 证书校验，默认 `false`。**默认不要开启**，只有官方证书链确实出问题的老环境才临时打开 |
 | `login_admin_only` | 只允许主人发起登录，默认 `false` |
 
 ## 换到别的 bot 框架
@@ -93,9 +93,9 @@ Koishi / Yunzai 这类非 Python 框架，建议把 core 包一层 FastAPI 当 H
 
 只算插件功能本身（按对话轮次粗分，截至 2026-11-18 03:00）：
 
-- 96 轮 / 943 次请求
-- Token 合计约 **3.99 亿**（缓存命中 396,856,320 ／ 未命中 1,645,188 ／ 输出 619,441）
-- 约 **¥12.1**（DeepSeek 峰谷价估算，不含部署运维与闲聊）
+- 102 轮 / 997 次请求
+- Token 合计约 **4.22 亿**（缓存命中 419,331,840 ／ 未命中 1,679,873 ／ 输出 650,489）
+- 约 **¥13.1**（DeepSeek 峰谷价估算，不含部署运维与闲聊）
 - 口径：按 `dsh-cost.js` 价目表估算，官方按缓存折扣实扣通常更低；每次发版前用 `node dsh-cost.js cost --session <id>` 重算
 
 ## 许可证

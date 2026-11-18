@@ -12,7 +12,6 @@
 """
 import argparse
 import io
-import logging
 import os
 import sys
 from datetime import datetime
@@ -126,10 +125,11 @@ def _warn_missing_font():
     if _font_warned:
         return
     _font_warned = True
-    logging.warning(
+    print(
         "[dancecube] 没有找到中文字体，图里的中文会显示成方块。"
         " Linux 请安装 fonts-wqy-zenhei 或 fonts-noto-cjk；"
-        " 也可以在插件目录放一份 NotoSansSC-Regular.otf。"
+        " 也可以在插件目录放一份 NotoSansSC-Regular.otf。",
+        file=sys.stderr,
     )
 
 

@@ -28,10 +28,10 @@
     }
   },
   "export_dir": {
-    "description": "成绩 xlsx 导出目录（管理员本机路径）",
+    "description": "成绩 xlsx 导出目录（可留空）",
     "type": "string",
     "default": "",
-    "hint": "「/导出成绩」会把全部成绩表写到这里；机器人只提示路径，文件需联系管理员获取。"
+    "hint": "留空时导出到 plugin_data/astrbot_plugin_dancecube/export/；如填自定义路径，必须位于该插件数据目录内，否则会被忽略。"
   },
   "catalog_ttl_minutes": {
     "description": "曲库全表缓存分钟数",

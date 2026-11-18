@@ -12,7 +12,6 @@
 """
 import asyncio
 import json
-import logging
 import os
 import random
 import re
@@ -29,7 +28,7 @@ from . import login as dc_login
 from . import music as dc_music
 from . import net
 from .client import Player
-from .export import DEFAULT_EXPORT_DIR, export_scores
+from .export import export_scores
 from .profile_image import build_info
 from .push import PushStore
 from .safe import safe_error
@@ -115,13 +114,29 @@ def file_send_hint(err):
     return "可能是网络波动或接口临时异常，稍后再试即可。"
 
 
+class _NullLogger:
+    """未注入 logger 时的占位实现：不依赖标准库 logging 模块。"""
+
+    def debug(self, *args, **kwargs):
+        pass
+
+    def info(self, *args, **kwargs):
+        pass
+
+    def warning(self, *args, **kwargs):
+        pass
+
+    def error(self, *args, **kwargs):
+        pass
+
+
 class DanceCubeService:
     """把命令逻辑从框架里拆出来，所有方法只依赖 RequestContext。"""
 
     def __init__(self, config, data_dir, bundled_data_dir=None,
                  notifier=None, logger=None):
         self.config = config
-        self.logger = logger or logging.getLogger("dancecube")
+        self.logger = logger or _NullLogger()
         self.notifier = notifier
         self.data_dir = Path(data_dir)
         self.tokens_dir = self.data_dir / "tokens"
@@ -561,7 +576,7 @@ class DanceCubeService:
             yield Text(err)
             return
         yield Text("正在拉取全部成绩并生成 xlsx，请稍候…")
-        out_dir = str(self.config.get("export_dir") or DEFAULT_EXPORT_DIR)
+        out_dir = self._export_dir()
         try:
             path, n, name, role_id = await asyncio.to_thread(
                 export_scores, player, out_dir
@@ -573,6 +588,25 @@ class DanceCubeService:
         yield File(str(path), Path(path).name, )
 
     # ------------------------------------------------------------ 谱面推送
+    def _export_dir(self) -> str:
+        """导出目录固定在插件数据目录内；配置的路径越界时忽略。"""
+        base = self.data_dir.resolve()
+        raw = str(self.config.get("export_dir") or "").strip()
+        if raw:
+            try:
+                p = Path(raw).expanduser().resolve()
+                if os.path.commonpath([str(p), str(base)]) == str(base):
+                    p.mkdir(parents=True, exist_ok=True)
+                    return str(p)
+            except (ValueError, OSError):
+                pass
+            self.logger.warning(
+                "[dancecube] export_dir 不在插件数据目录内，已忽略：%s", raw
+            )
+        out = base / "export"
+        out.mkdir(parents=True, exist_ok=True)
+        return str(out)
+
     def _is_owner(self, ctx: RequestContext) -> bool:
         owner = str(self.config.get("owner_qq") or "").strip()
         return bool(owner) and ctx.user_id == owner

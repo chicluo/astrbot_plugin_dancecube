@@ -50,7 +50,7 @@ OWNER = os.environ.get("DANCECUBE_OWNER", "")          # 主人 QQ
 GROUPS = [
     g for g in os.environ.get("DANCECUBE_GROUPS", "").split(",") if g.strip()
 ] or ["*"]
-EXPORT_DIR = os.environ.get("DANCECUBE_EXPORT_DIR", str(DATA_DIR / "grades"))
+EXPORT_DIR = os.environ.get("DANCECUBE_EXPORT_DIR", str(DATA_DIR / "export"))
 
 CONFIG = {
     "owner_qq": OWNER,
@@ -98,6 +98,9 @@ def get_service(bot: Bot) -> DanceCubeService:
             data_dir=DATA_DIR,
             bundled_data_dir=REPO_PARENT / "astrbot_plugin_dancecube" / "data",
             notifier=notifier,
+            # logger 可选：不传则插件完全静默（核心包不 import 标准 logging，方便市场审核）。
+            # 想在适配层留日志，传一个带 info/warning 的对象即可，例如 NoneBot2 的
+            # `from nonebot.log import logger`。
         )
     return _service
 

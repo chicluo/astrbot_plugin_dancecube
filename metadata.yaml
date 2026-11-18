@@ -2,7 +2,7 @@ name: astrbot_plugin_dancecube
 display_name: 舞小鲸 · 舞立方查询
 desc: 舞小鲸（舞立方查询）：扫码登录、个人信息、B15+R15 / B30 / AP30 战力分析图
 author: chic洛因
-version: 1.0.0
+version: 1.0.1
 license: PolyForm-Noncommercial-1.0.0
 repo: https://github.com/chicluo/astrbot_plugin_dancecube
 support_platforms:
