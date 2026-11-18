@@ -10,6 +10,7 @@
 [![Version](https://img.shields.io/badge/version-1.0.1-2ea043)](https://github.com/chicluo/astrbot_plugin_dancecube)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.9.2-6f42c1)](https://github.com/AstrBotDevs/AstrBot)
 [![Platform](https://img.shields.io/badge/QQ-aiocqhttp%20%7C%20qq__official-4f9cf9)]()
+[![AstrBot Market](https://img.shields.io/badge/AstrBot-%E6%8F%92%E4%BB%B6%E5%B8%82%E5%9C%BA-6f42c1)](https://cloud.astrbot.app/plugin/chicluo/astrbot_plugin_dancecube)
 
 </div>
 
@@ -34,7 +35,7 @@
 
 ## 快速开始
 
-1. 安装 [AstrBot](https://github.com/AstrBotDevs/AstrBot)（建议 ≥ 4.9.2）
+1. 安装 [AstrBot](https://github.com/AstrBotDevs/AstrBot)（建议 ≥ 4.9.2）；也可以直接从 AstrBot 插件市场搜索「舞小鲸」安装
 2. 把本目录放进 `data/plugins/`
 3. 安装依赖：`pip install -r requirements.txt`
 4. 在面板里填好 `owner_qq`（`export_dir` 可留空），到群里发 `/舞立方登录`
