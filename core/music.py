@@ -25,6 +25,22 @@ from tinytag import TinyTag
 
 from . import net
 
+try:  # 简繁互搜：没装 zhconv 时退化为原文比较
+    from zhconv import convert as _zh_convert
+except ImportError:  # pragma: no cover
+    _zh_convert = None
+
+
+def _norm_text(text):
+    """搜索归一化：简繁统一到简体，并忽略大小写。"""
+    s = (text or "").strip()
+    if _zh_convert is not None:
+        try:
+            s = _zh_convert(s, "zh-hans")
+        except Exception:  # noqa: BLE001
+            pass
+    return s.lower()
+
 # 时长缓存的读-改-写要串行，否则并发探测会互相覆盖
 _WRITE_LOCK = threading.Lock()
 # 自制谱全量拉取约 56 秒，并发请求只让一个真的去拉
@@ -445,13 +461,13 @@ class MusicLib:
 
     # ---------------------------------------------------------- 检索
     def _search(self, records, keyword):
-        low = keyword.lower()
+        low = _norm_text(keyword)
         exact, prefix, contains = [], [], []
         for r in records:
             name = (r.get("name") or "").strip()
             if not name:
                 continue
-            nlow = name.lower()
+            nlow = _norm_text(name)
             if nlow == low:
                 exact.append(r)
             elif nlow.startswith(low):
