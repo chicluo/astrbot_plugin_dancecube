@@ -48,7 +48,7 @@ def build_info(player):
     y2 = y1 + stat_h + gap
     hist_y = y2 + stat_h + 12
     hist_h = 286
-    H = hist_y + hist_h + 64
+    H = hist_y + hist_h + 86
 
     img = gradient_bg(W, H)
     ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
