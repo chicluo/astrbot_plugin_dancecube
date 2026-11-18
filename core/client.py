@@ -101,6 +101,7 @@ def difficulty_name(lev_new, old_lev):
     except (TypeError, ValueError):
         lev_new = 0
     if lev_new >= 100:
+        # show+ 谱：和 [秀] 一样只有秀机能玩，二代机玩不了
         label = SHOW_TYPE.get(lev_new, "")
         if label.startswith("show+-"):
             label = label[len("show+-") :]
