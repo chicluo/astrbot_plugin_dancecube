@@ -7,7 +7,7 @@
 **查分、曲库、成绩导出，一条指令搞定。**
 
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-1f6feb)](https://polyformproject.org/licenses/noncommercial/1.0.0)
-[![Version](https://img.shields.io/badge/version-1.0.1-2ea043)](https://github.com/chicluo/astrbot_plugin_dancecube)
+[![Version](https://img.shields.io/badge/version-1.0.2-2ea043)](https://github.com/chicluo/astrbot_plugin_dancecube)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.9.2-6f42c1)](https://github.com/AstrBotDevs/AstrBot)
 [![Platform](https://img.shields.io/badge/QQ-aiocqhttp%20%7C%20qq__official-4f9cf9)]()
 [![AstrBot Market](https://img.shields.io/badge/AstrBot-%E6%8F%92%E4%BB%B6%E5%B8%82%E5%9C%BA-6f42c1)](https://cloud.astrbot.app/plugin/chicluo/astrbot_plugin_dancecube)
@@ -92,11 +92,11 @@ Koishi / Yunzai 这类非 Python 框架，建议把 core 包一层 FastAPI 当 H
 
 ## 开发花销
 
-只算插件功能本身（按对话轮次粗分，截至 2026-11-18 03:00）：
+只算插件功能本身（按对话轮次粗分，截至 2026-11-19 13:00）：
 
-- 102 轮 / 997 次请求
-- Token 合计约 **4.22 亿**（缓存命中 419,331,840 ／ 未命中 1,679,873 ／ 输出 650,489）
-- 约 **¥13.1**（DeepSeek 峰谷价估算，不含部署运维与闲聊）
+- 119 轮 / 1,110 次请求
+- Token 合计约 **4.93 亿**（缓存命中 490,082,432 ／ 未命中 1,758,706 ／ 输出 712,388）
+- 约 **¥14.96**（DeepSeek 峰谷价估算，不含部署运维与闲聊）
 - 口径：按 `dsh-cost.js` 价目表估算，官方按缓存折扣实扣通常更低；每次发版前用 `node dsh-cost.js cost --session <id>` 重算
 
 ## 许可证
