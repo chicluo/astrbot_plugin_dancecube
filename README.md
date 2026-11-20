@@ -7,7 +7,7 @@
 **查分、曲库、成绩导出，一条指令搞定。**
 
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-1f6feb)](https://polyformproject.org/licenses/noncommercial/1.0.0)
-[![Version](https://img.shields.io/badge/version-1.0.2-2ea043)](https://github.com/chicluo/astrbot_plugin_dancecube)
+[![Version](https://img.shields.io/badge/version-1.0.3-2ea043)](https://github.com/chicluo/astrbot_plugin_dancecube)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.9.2-6f42c1)](https://github.com/AstrBotDevs/AstrBot)
 [![Platform](https://img.shields.io/badge/QQ-aiocqhttp%20%7C%20qq__official-4f9cf9)]()
 [![AstrBot Market](https://img.shields.io/badge/AstrBot-%E6%8F%92%E4%BB%B6%E5%B8%82%E5%9C%BA-6f42c1)](https://cloud.astrbot.app/plugin/chicluo/astrbot_plugin_dancecube)

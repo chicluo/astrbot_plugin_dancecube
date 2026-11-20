@@ -252,6 +252,10 @@ class DanceCubeService:
                 pass
 
     def _cooldown_wait(self, uid: str, seconds: int = 30, kind: str = "query") -> int:
+        # 主人不设冷却（测试时不想等）
+        owner = str(self.config.get("owner_qq") or "").strip()
+        if owner and uid == owner:
+            return 0
         key = "%s:%s" % (kind, uid)
         now = time.time()
         last = self._last_call.get(key, 0.0)
