@@ -643,6 +643,8 @@ class MusicLib:
             # 只有这几首是商店隐藏曲（未购买前无音频），其余官谱缺时长就是数据没有
             if str(record.get("musicId")) in HIDDEN_SONG_IDS:
                 lines.append("  时长：商店隐藏歌曲，无法拉取")
+            else:
+                lines.append("  时长：<无法获取>")
         owner_id = record.get("ownerId")
         owner_name = record.get("ownerName")
         if owner_id or owner_name:
