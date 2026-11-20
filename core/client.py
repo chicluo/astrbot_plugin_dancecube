@@ -375,7 +375,7 @@ class Player:
                             "name": song.get("Name"),
                             "ownerType": int(song.get("OwnerType", 0)),
                             "cls": cls,
-                            "clsName": GENRE_NAMES.get(cat, "-"),
+                            "clsName": GENRE_NAMES.get(cat) or "",
                             "levelType": lev,
                             "levelTypeName": self._level_name(song.get("MusicID"), lv, lev, old),
                             "diff": int(old) if old is not None else -1,

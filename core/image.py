@@ -237,14 +237,44 @@ def draw_header(img, d, info):
     text(d, (W - M, 136), "LVRATIO", font(F_REG, 17), fill=C_DIM, anchor="ra")
 
 
+def _fit_text(d, text, font_path, base_size, max_width, min_size):
+    """超宽时先缩字号；缩到 min_size 还超宽就按宽度拆行。返回 (font, lines)。"""
+    text = str(text or "")
+    if not text:
+        return font(font_path, base_size), [""]
+    size = base_size
+    while size >= min_size:
+        f = font(font_path, size)
+        if d.textlength(text, font=f) <= max_width:
+            return f, [text]
+        size -= 1
+    f = font(font_path, min_size)
+    lines, cur = [], ""
+    for ch in text:
+        if d.textlength(cur + ch, font=f) <= max_width:
+            cur += ch
+        else:
+            if cur:
+                lines.append(cur)
+            cur = ch
+    if cur:
+        lines.append(cur)
+    return f, lines
+
+
 def draw_stats(d, y, stats):
     sh = 84
     cw = (W - 2 * M - 4 * 12) // 5
     for i, (label, value) in enumerate(stats):
         x0 = M + i * (cw + 12)
         rounded(d, (x0, y, x0 + cw, y + sh), 14, (255, 255, 255, 14))
-        text(d, (x0 + 14, y + 12), label, font(F_LIGHT, 17), fill=C_DIM)
-        text(d, (x0 + 14, y + 36), str(value), font(F_BOLD, 27), fill=C_TEXT)
+        label_f, label_lines = _fit_text(d, label, F_LIGHT, 17, cw - 28, 12)
+        text(d, (x0 + 14, y + 12), label_lines[0], label_f, fill=C_DIM)
+        value_f, value_lines = _fit_text(d, str(value), F_BOLD, 27, cw - 28, 15)
+        vy = y + 36
+        for line in value_lines[:2]:
+            text(d, (x0 + 14, vy), line, value_f, fill=C_TEXT)
+            vy += int(value_f.size * 1.15)
     return y + sh
 
 
