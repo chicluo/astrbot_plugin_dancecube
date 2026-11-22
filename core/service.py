@@ -92,9 +92,40 @@ def safe_id(value) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", str(value or "user"))
 
 
+def _harden_nt(path, is_dir):
+    """Windows 上 os.chmod 不映射到 NTFS ACL，改用 icacls 收紧到当前用户 + SYSTEM + Administrators。"""
+    try:
+        import subprocess
+        user = os.environ.get("USERNAME", "")
+        domain = os.environ.get("USERDOMAIN", "")
+        owner = ("%s\\%s" % (domain, user)) if domain and user else user
+        if not owner:
+            return
+        rights = "(OI)(CI)F" if is_dir else "F"
+        args = ["icacls", str(path), "/inheritance:r"]
+        for who in (owner, "SYSTEM", "Administrators"):
+            args += ["/grant:r", "%s:%s" % (who, rights)]
+        subprocess.run(args, capture_output=True, timeout=10)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def harden_dir(path):
+    if os.name == "nt":
+        _harden_nt(path, True)
+        return
     try:
         os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+def harden_file(path):
+    if os.name == "nt":
+        _harden_nt(path, False)
+        return
+    try:
+        os.chmod(path, 0o600)
     except OSError:
         pass
 
@@ -226,10 +257,7 @@ class DanceCubeService:
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(tok, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, path)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+        harden_file(path)
 
     def drop_token(self, uid: str) -> bool:
         path = self._token_path(uid)
@@ -568,6 +596,7 @@ class DanceCubeService:
                 extra = "，%d 首曲目" % songs if songs else ""
                 yield Text("%s已生成：%d 行%s" % (label, rows, extra))
 
+        yield Text("手机QQ内浏览表格无筛选功能，请下载后使用其他应用打开。")
         shown = "%s_%s.xlsx" % (label, time.strftime("%Y%m%d"))
         yield File(str(path), shown)
 
@@ -589,6 +618,7 @@ class DanceCubeService:
             yield Text("导出失败：%s" % safe_error(e))
             return
         self.logger.info("成绩导出：%s（角色 %s）%d 条 -> %s", name, role_id, n, path)
+        yield Text("手机QQ内浏览表格无筛选功能，请下载后使用其他应用打开。")
         yield File(str(path), Path(path).name, )
 
     # ------------------------------------------------------------ 谱面推送
