@@ -505,8 +505,15 @@ class DanceCubeService:
             async for reply in self._send_catalog(kind):
                 yield reply
             return
+        lib = self._music_lib()
+        # 全量补全期间单曲查询会触发探测、和补全线程抢同一把写锁，先拦住
+        if lib.probe_busy():
+            yield Text(
+                "曲库音频正在全量拉取中（%s），请过段时间再查。\n"
+                "发 /曲库补全 状态 可看进度。" % lib.probe_status_text()
+            )
+            return
         try:
-            lib = self._music_lib()
             hits = await asyncio.to_thread(lib.find, name, 50)
         except Exception as e:  # noqa: BLE001
             yield Text("曲库查询失败：%s" % safe_error(e))
@@ -644,6 +651,50 @@ class DanceCubeService:
     def _is_owner(self, ctx: RequestContext) -> bool:
         owner = str(self.config.get("owner_qq") or "").strip()
         return bool(owner) and ctx.user_id == owner
+
+    async def backfill(self, ctx: RequestContext, arg: str = ""):
+        """曲库音频全量补全：批量探测缺时长/码率的自制谱（官谱没有 audioUrl，补不了）。"""
+        if not self.allowed(ctx):
+            return
+        if not self._is_owner(ctx):
+            yield Text("只有主控可以触发曲库补全。")
+            return
+        lib = self._music_lib()
+        sub = (arg or "").strip().lower()
+        if sub in ("状态", "status"):
+            yield Text("曲库补全：" + lib.probe_status_text())
+            return
+        if sub in ("停止", "stop"):
+            if not lib.probe_busy():
+                yield Text("当前没有在跑的全量拉取。")
+                return
+            lib.stop_probe()
+            yield Text("已请求停止，当前这首跑完就退出。")
+            return
+        if lib.probe_busy():
+            yield Text("已经在跑了：" + lib.probe_status_text())
+            return
+        yield Text(
+            "已开始全量拉取（后台跑，不占聊天）。\n"
+            "拉取期间单曲查询会提示稍后再试，进度用 /曲库补全 状态 查。"
+        )
+        asyncio.create_task(self._run_backfill(ctx))
+
+    async def _run_backfill(self, ctx: RequestContext):
+        """后台跑批量探测，结束后把结果推回原会话。"""
+        lib = self._music_lib()
+        try:
+            done, failed, total = await asyncio.to_thread(lib.probe_all_missing)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("曲库补全异常：%s", e)
+            await self._notify(ctx, [Text("曲库补全失败：%s" % safe_error(e))])
+            return
+        if done < 0:
+            return
+        await self._notify(
+            ctx, [Text("曲库补全完成：%d/%d，失败 %d。补到的时长/码率直接写回缓存。"
+                       % (done, total, failed))]
+        )
 
     async def push_toggle(self, ctx: RequestContext, arg: str = ""):
         """打开/关闭/查看本群的谱面更新推送（开关仅主控可用）。"""

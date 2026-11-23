@@ -236,9 +236,16 @@ def _norm_user(item):
 
 
 def _probe_audio(url):
-    """下载音频读一次时长（按需兜底，约 1 秒）。只允许白名单域名，上限 64MB。"""
+    """下载音频读一次时长与体积（按需兜底，约 1 秒）。只允许白名单域名，上限 64MB。
+
+    返回 ``(时长秒, 文件字节数)``；失败返回 ``None``。
+    体积是算码率的唯一来源，所以和时长一起返回，别只拿时长。
+    """
     import tempfile
 
+    # net 只放行 https（安全策略）；个别 AudioUrl 写的是 http，同域升级即可
+    if url.startswith("http://"):
+        url = "https://" + url[len("http://"):]
     # tinytag 按扩展名挑解析器，临时文件要带上原扩展名
     suffix = os.path.splitext(urllib.parse.urlsplit(url).path)[1].lower()
     if suffix not in (".mp3", ".m4a", ".mp4", ".ogg", ".flac", ".wav", ".wma"):
@@ -247,9 +254,10 @@ def _probe_audio(url):
     os.close(fd)
     try:
         net.download_file(url, path, max_bytes=64 << 20, timeout=60)
+        size = os.path.getsize(path)
         tag = TinyTag.get(path)
         if tag is not None and tag.duration:
-            return round(float(tag.duration), 1)
+            return round(float(tag.duration), 1), size
     except Exception:  # noqa: BLE001
         return None
     finally:
@@ -267,7 +275,15 @@ class MusicLib:
         self._official = None
         self._user = None
         self._duration = None
+        self._size = None
         self.last_busy = False
+        # 音频全量补全：一次只允许一个批量任务，期间的查询由 service 层拦截
+        self._probe_lock = threading.Lock()
+        self._probe_stop = False
+        self._probe_total = 0
+        self._probe_done = 0
+        self._probe_failed = 0
+        self._probe_summary = ""
 
     def load_duration(self):
         """曲目时长表（musicId → 秒），官谱和自制谱合并。"""
@@ -301,11 +317,12 @@ class MusicLib:
         return self._size
 
     def probe_duration(self, record):
-        """缺时长时现拉音频算一次，并写回缓存。"""
-        if record.get("duration"):
-            return record
+        """缺时长或码率时现拉音频算一次，并写回缓存。"""
         mid = str(record.get("musicId") or "")
         if not mid:
+            return record
+        sizes = self.load_bitrate()
+        if record.get("duration") and mid in sizes:
             return record
         url = record.get("audioUrl") or ""
         if not url:
@@ -319,23 +336,92 @@ class MusicLib:
                 return record
         if not url:
             return record
-        dur = _probe_audio(url)
+        result = _probe_audio(url)
+        if not result:
+            return record
+        dur, size = result
         if not dur:
             return record
         record["duration"] = dur
-        try:
-            p = os.path.join(os.path.dirname(str(self.cache_path)), "music_duration_user.json")
-            with _WRITE_LOCK:  # 读-改-写串行，避免并发探测互相覆盖
-                data = {}
-                if os.path.exists(p):
-                    with open(p, encoding="utf-8") as f:
-                        data = json.load(f)
-                data[mid] = dur
-                _atomic_json(p, data)
-            self._duration = None  # 下次重新加载
-        except (OSError, ValueError):
-            pass
+        if size:
+            record["size"] = size
+            record["kbps"] = round(size * 8 / dur / 1000)
+        self._save_probe(mid, dur, size)
         return record
+
+    def _save_probe(self, mid, dur, size):
+        """把探测结果并进 music_duration_user.json / music_bitrate.json（各自读-改-写）。"""
+        base = os.path.dirname(str(self.cache_path))
+        with _WRITE_LOCK:
+            for name, value in (("music_duration_user.json", dur), ("music_bitrate.json", size)):
+                if not value:
+                    continue
+                p = os.path.join(base, name)
+                try:
+                    data = {}
+                    if os.path.exists(p):
+                        with open(p, encoding="utf-8") as f:
+                            data = json.load(f)
+                    data[str(mid)] = value
+                    _atomic_json(p, data)
+                except (OSError, ValueError):
+                    continue
+        self._duration = None  # 下次重新加载
+        self._size = None
+
+    # ---------------------------------------------------------- 音频全量补全
+    def probe_busy(self):
+        """是否正在跑音频全量补全。"""
+        return self._probe_lock.locked()
+
+    def stop_probe(self):
+        """请求停止；当前这一首跑完就退出。"""
+        self._probe_stop = True
+
+    def probe_status_text(self):
+        if not self._probe_lock.locked():
+            return self._probe_summary or "空闲"
+        return "进行中 %d/%d（失败 %d）" % (
+            self._probe_done, self._probe_total, self._probe_failed)
+
+    def probe_all_missing(self, gap=0.2):
+        """批量探测缺时长/码率的自制谱（官谱没有 audioUrl，补不了）。
+
+        返回 ``(完成, 失败, 总数)``；已有任务在跑时返回 ``(-1, 0, 0)``。
+        """
+        if not self._probe_lock.acquire(blocking=False):
+            return -1, 0, 0
+        self._probe_stop = False
+        try:
+            items = self.load_user()
+            dur = self.load_duration()
+            size = self.load_bitrate()
+            targets = []
+            for r in items:
+                mid = str(r.get("musicId") or "")
+                if not mid or not r.get("audioUrl"):
+                    continue
+                if dur.get(mid) is None or size.get(mid) is None:
+                    targets.append(r)
+            self._probe_total = len(targets)
+            self._probe_done = 0
+            self._probe_failed = 0
+            for r in targets:
+                if self._probe_stop:
+                    break
+                try:
+                    self.probe_duration(r)
+                except Exception:  # noqa: BLE001
+                    self._probe_failed += 1
+                self._probe_done += 1
+                if gap:
+                    time.sleep(gap)
+            self._probe_summary = "上次：完成 %d/%d，失败 %d" % (
+                self._probe_done, self._probe_total, self._probe_failed)
+            return self._probe_done, self._probe_failed, self._probe_total
+        finally:
+            self._probe_stop = False
+            self._probe_lock.release()
 
     def _attach_duration(self, records):
         dur = self.load_duration()

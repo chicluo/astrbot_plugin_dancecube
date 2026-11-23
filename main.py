@@ -7,6 +7,7 @@
   /myrtb30     —— B30 战力分析图
   /myrtap30    —— AP30 战力分析图
   /曲目        —— 曲库查询 / 官谱全表 / 自制谱全表
+  /曲库补全    —— 批量探测缺时长/码率的自制谱（仅主控）；期间单曲查询会提示稍后再试
   /导出成绩    —— 导出全部成绩为 xlsx
   /舞立方退出  —— 清除当前 QQ 的 token
 
@@ -175,5 +176,12 @@ class DanceCube(star.Star):
     async def dc_push(self, event: AstrMessageEvent, arg: str = ""):
         async for r in self._emit(
             event, self.service.push_toggle(self._ctx(event), arg)
+        ):
+            yield r
+
+    @filter.command("曲库补全", alias={"补全时长", "拉取音频"})
+    async def dc_backfill(self, event: AstrMessageEvent, arg: str = ""):
+        async for r in self._emit(
+            event, self.service.backfill(self._ctx(event), arg)
         ):
             yield r
