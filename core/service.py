@@ -797,14 +797,20 @@ class DanceCubeService:
         old = await asyncio.to_thread(self._snapshot, lib)
         ok = await asyncio.to_thread(lib.refresh_official)
         while not ok:
-            self.logger.warning("[dancecube] 官谱定时刷新失败，30 分钟后重试")
+            self.logger.warning(
+                "[dancecube] 官谱定时刷新失败，30 分钟后重试（%s）",
+                getattr(lib, "last_error", "") or "原因未知",
+            )
             await asyncio.sleep(30 * 60)
             ok = await asyncio.to_thread(lib.refresh_official)
         self.logger.info("[dancecube] 官谱已定时刷新")
 
         ok = await asyncio.to_thread(lib.refresh_user)
         while not ok:
-            self.logger.warning("[dancecube] 自制谱定时刷新失败，30 分钟后重试")
+            self.logger.warning(
+                "[dancecube] 自制谱定时刷新失败，30 分钟后重试（%s）",
+                getattr(lib, "last_error", "") or "原因未知",
+            )
             await asyncio.sleep(30 * 60)
             ok = await asyncio.to_thread(lib.refresh_user)
         self.logger.info("[dancecube] 自制谱已定时刷新")

@@ -277,6 +277,8 @@ class MusicLib:
         self._duration = None
         self._size = None
         self.last_busy = False
+        # 最近一次曲库刷新失败的原因；success 时清空（定时任务日志用）
+        self.last_error = ""
         # 音频全量补全：一次只允许一个批量任务，期间的查询由 service 层拦截
         self._probe_lock = threading.Lock()
         self._probe_stop = False
@@ -485,17 +487,22 @@ class MusicLib:
     def refresh_official(self):
         """强制重拉官谱并写盘，成功返回 True（定时任务用）。"""
         if not _OFFICIAL_LOCK.acquire(blocking=False):
+            self.last_error = "上一次官谱刷新还没结束"
             return False  # 已有线程在拉
         try:
             songs = self._fetch("/Dance/MusicData/GetValidMusicList")
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            self.last_error = "官谱拉取异常：%s" % e
             return False
         finally:
             _OFFICIAL_LOCK.release()
         if not isinstance(songs, list) or len(songs) < 500:
+            got = len(songs) if isinstance(songs, list) else "非列表"
+            self.last_error = "官谱数据残缺（%s 条），不覆盖缓存" % got
             return False  # 接口异常返回残缺数据时不要覆盖好缓存
         self._official = [_norm_official(x) for x in songs]
         _atomic_json(self._official_path(), songs)
+        self.last_error = ""
         return True
 
     def busy(self):
@@ -560,9 +567,11 @@ class MusicLib:
             page += 1
             time.sleep(0.3)
         if not items or len(items) < 1000:
+            self.last_error = "自制谱数据残缺（%d 条），不覆盖缓存" % len(items)
             return False  # 翻页异常拿到的残缺数据不要覆盖好缓存
         self._user = items
         _atomic_json(path, items)
+        self.last_error = ""
         return True
 
     # ---------------------------------------------------------- 检索
