@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from . import NullLogger
 from . import catalog as dc_catalog
 from . import client as dc_client
 from . import image as dc_image
@@ -73,6 +74,10 @@ class RequestContext:
     platform: str = ""
     text: str = ""  # 完整消息文本（含命令前缀），多词歌名要靠它
     origin: str = ""  # 会话标识，用于登录完成后的主动推送
+    # 框架原始 event，仅用于「被动回复」：QQ 官方通道对主动消息限制很严，
+    # 群聊里主动推送会直接返回「无权限」，能拿到 event 就必须走它回复。
+    # core 层只把它原样传给 notifier，不读任何属性，保持框架无关。
+    raw: object | None = None
 
 
 # ---------------------------------------------------------------- 小工具
@@ -145,29 +150,13 @@ def file_send_hint(err):
     return "可能是网络波动或接口临时异常，稍后再试即可。"
 
 
-class _NullLogger:
-    """未注入 logger 时的占位实现：不依赖标准库 logging 模块。"""
-
-    def debug(self, *args, **kwargs):
-        pass
-
-    def info(self, *args, **kwargs):
-        pass
-
-    def warning(self, *args, **kwargs):
-        pass
-
-    def error(self, *args, **kwargs):
-        pass
-
-
 class DanceCubeService:
     """把命令逻辑从框架里拆出来，所有方法只依赖 RequestContext。"""
 
     def __init__(self, config, data_dir, bundled_data_dir=None,
                  notifier=None, logger=None):
         self.config = config
-        self.logger = logger or _NullLogger()
+        self.logger = logger or NullLogger()
         self.notifier = notifier
         self.data_dir = Path(data_dir)
         self.tokens_dir = self.data_dir / "tokens"
@@ -182,8 +171,9 @@ class DanceCubeService:
         self._catalog_lock = asyncio.Lock()
         self._mlib = None
         self._warned_openid = False
+        self._token_warned: set[str] = set()
         self._sched_task = None
-        self._push = PushStore(str(self.data_dir / "push_targets.json"))
+        self._push = PushStore(str(self.data_dir / "push_targets.json"), logger=self.logger)
         self._ensure_music_cache(bundled_data_dir)
         self._check_config()
 
@@ -217,7 +207,21 @@ class DanceCubeService:
         )
 
     # ------------------------------------------------------------ 权限
+    def _platform_ok(self, ctx: RequestContext) -> bool:
+        """按机器人实例过滤：配了 bound_platform 时只响应那一个实例。
+
+        AstrBot 的会话标识形如 ``default_<实例id>:GroupMessage:xxx``，
+        冒号前就是平台实例 id。多个机器人共用插件时靠它隔离，
+        否则同一个指令会在所有机器人上同时应答。
+        """
+        bound = str(self.config.get("bound_platform") or "").strip()
+        if not bound:
+            return True
+        return (ctx.origin or "").startswith(bound + ":")
+
     def allowed(self, ctx: RequestContext) -> bool:
+        if not self._platform_ok(ctx):
+            return False
         owner = str(self.config.get("owner_qq") or "").strip()
         if owner and ctx.user_id == owner:
             return True  # 机器人主人不受群白名单限制
@@ -248,7 +252,14 @@ class DanceCubeService:
             return None
         try:
             tok = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            # 损坏时按「未登录」处理，用户只看到要重新登录；同一个文件只告警一次，
+            # 免得每来一条查询就刷一行日志
+            if path.name not in self._token_warned:
+                self._token_warned.add(path.name)
+                self.logger.warning(
+                    "[dancecube] 登录凭证损坏，已按未登录处理（%s）：%s", path.name, safe_error(e)
+                )
             return None
         return tok if tok.get("access_token") else None
 
@@ -326,6 +337,12 @@ class DanceCubeService:
         return out
 
     async def _notify(self, ctx: RequestContext, replies):
+        """登录/补全结束后主动补发结果。
+
+        优先让 notifier 用原始 event 走被动回复（QQ 官方通道对主动消息的限制
+        是「群聊里必须带上行 msg_id」，过期即无权限）；拿不到 event 时才退回
+        按会话标识主动推送。
+        """
         if self.notifier is None:
             self.logger.info("[dancecube] 没有配置 notifier，跳过主动推送：%r", replies)
             return
@@ -691,10 +708,18 @@ class DanceCubeService:
             return
         if done < 0:
             return
-        await self._notify(
-            ctx, [Text("曲库补全完成：%d/%d，失败 %d。补到的时长/码率直接写回缓存。"
-                       % (done, total, failed))]
-        )
+        fails = lib.probe_fail_summary()
+        if failed:
+            self.logger.warning(
+                "[dancecube] 曲库补全完成 %d/%d，失败 %d：%s",
+                done, total, failed, fails or "原因未记录",
+            )
+        else:
+            self.logger.info("[dancecube] 曲库补全完成 %d/%d，全部成功", done, total)
+        text = "曲库补全完成：%d/%d，失败 %d。补到的时长/码率直接写回缓存。" % (done, total, failed)
+        if fails:
+            text += "\n失败原因：" + fails
+        await self._notify(ctx, [Text(text)])
 
     async def push_toggle(self, ctx: RequestContext, arg: str = ""):
         """打开/关闭/查看本群的谱面更新推送（开关仅主控可用）。"""
@@ -737,14 +762,16 @@ class DanceCubeService:
                 target = dest / src.name
                 if not target.exists():
                     shutil.copy(src, target)  # 用 copy 不用 copy2：让 mtime 变成此刻
-        except OSError:
-            pass
+        except OSError as e:
+            # 首次安装拷不进内置曲库，之后只能靠网络刷新，日志得留一笔
+            self.logger.warning("[dancecube] 内置曲库复制失败（%s）：%s", dest, safe_error(e))
 
     def _music_lib(self):
         if self._mlib is None:
             self._mlib = dc_music.MusicLib(
                 str(self.data_dir / "music" / "music_library.json"),
                 str(self.data_dir.parent),
+                logger=self.logger,
             )
         return self._mlib
 
@@ -818,8 +845,7 @@ class DanceCubeService:
         new = await asyncio.to_thread(self._snapshot, lib)
         self._record_changes(old, new)
 
-    @staticmethod
-    def _snapshot(lib) -> dict:
+    def _snapshot(self, lib) -> dict:
         """直接读缓存文件得到 {MusicID: 曲名}，不触发加载或请求。"""
         out = {}
         for key, path in (("official", lib.official_path()), ("user", lib.user_path())):
@@ -832,8 +858,13 @@ class DanceCubeService:
                         mid = str(x.get("MusicID") or x.get("musicId") or "")
                         if mid:
                             items[mid] = str(x.get("Name") or x.get("name") or mid)
-            except (OSError, ValueError):
+            except FileNotFoundError:
                 pass
+            except (OSError, ValueError) as e:
+                # 快照读不到就检测不出变更，推送会变成「今天没更新」——得留下原因
+                self.logger.warning(
+                    "[dancecube] 曲库快照读取失败（%s）：%s", Path(path).name, safe_error(e)
+                )
             out[key] = items
         return out
 

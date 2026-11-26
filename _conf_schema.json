@@ -1,4 +1,10 @@
 {
+  "bound_platform": {
+    "description": "只在这个机器人实例上响应（留空=全部）",
+    "type": "string",
+    "default": "",
+    "hint": "多机器人共用一套插件时用它隔离，例如填 default_<实例id>，则只有该实例收到舞立方指令。填的是平台实例 id（AstrBot 后台「机器人」列表里那一串），不是 appid。"
+  },
   "owner_qq": {
     "description": "机器人主人 QQ",
     "type": "string",

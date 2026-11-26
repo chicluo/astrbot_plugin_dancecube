@@ -70,17 +70,37 @@ class DanceCube(star.Star):
             platform=self._platform(event),
             text=event.get_message_str() or "",
             origin=getattr(event, "unified_msg_origin", "") or "",
+            raw=event,
         )
 
     async def _notify(self, ctx: RequestContext, replies) -> None:
-        """登录完成后的主动推送：按会话标识补发，不依赖原事件句柄。"""
+        """登录/补全结束后把结果补发出去。
+
+        优先用原始 event 走被动回复：QQ 官方通道在群聊里对「主动消息」的限制
+        是上行 msg_id 必须在有效期内，轮询几十秒后才补发的消息早就过期了，
+        直接调 send_message 会得到「主动消息失败, 无权限」（2026-11-26 实测）。
+        拿不到 event 时（极少数调用方）才退回按会话标识主动推送。
+        """
         chain = MessageChain()
         for r in replies:
             if isinstance(r, Text):
                 chain.message(r.text)
             elif isinstance(r, Image):
                 chain.file_image(r.path)
-        if not chain.chain or not ctx.origin:
+        if not chain.chain:
+            return
+
+        event = ctx.raw
+        if event is not None:
+            try:
+                await event.send(chain)
+                return
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(
+                    "[dancecube] 被动回复失败，改走主动推送：%s", safe_error(e)
+                )
+
+        if not ctx.origin:
             return
         await self.context.send_message(ctx.origin, chain)
 

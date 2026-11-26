@@ -23,6 +23,7 @@ import urllib.request
 
 from tinytag import TinyTag
 
+from . import NullLogger
 from . import net
 
 try:  # 简繁互搜：没装 zhconv 时退化为原文比较
@@ -127,15 +128,21 @@ def _api(path, token, params=None):
 
 
 def _atomic_json(path, data):
-    """原子写 JSON：先写临时文件再 replace，避免并发读到半截。"""
+    """原子写 JSON：先写临时文件再 replace，避免并发读到半截。
+
+    成功返回 True。写缓存失败不该让整次刷新失败（内存里已经是新数据），
+    但调用方要能据返回值记一笔——以前这里静默吞掉 OSError，
+    「刷新成功但重启回旧数据」这种问题在日志里连个影子都没有。
+    """
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         os.replace(tmp, path)
-    except OSError:
-        pass
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def _norm_levels(items):
@@ -235,11 +242,20 @@ def _norm_user(item):
     }
 
 
+def _brief(exc, limit=120):
+    """异常压成一行短文本：日志和补全汇总都要用，太长会刷屏。"""
+    s = "%s: %s" % (type(exc).__name__, exc)
+    s = " ".join(s.split())
+    return s[:limit] + ("…" if len(s) > limit else "")
+
+
 def _probe_audio(url):
     """下载音频读一次时长与体积（按需兜底，约 1 秒）。只允许白名单域名，上限 64MB。
 
-    返回 ``(时长秒, 文件字节数)``；失败返回 ``None``。
+    返回 ``((时长秒, 文件字节数), "")``；失败返回 ``(None, 失败原因)``。
     体积是算码率的唯一来源，所以和时长一起返回，别只拿时长。
+    失败原因会进补全汇总和日志——以前这里直接吞异常，出问题只能看到一个
+    光秃秃的「失败」，排查全靠猜。
     """
     import tempfile
 
@@ -256,22 +272,23 @@ def _probe_audio(url):
         net.download_file(url, path, max_bytes=64 << 20, timeout=60)
         size = os.path.getsize(path)
         tag = TinyTag.get(path)
-        if tag is not None and tag.duration:
-            return round(float(tag.duration), 1), size
-    except Exception:  # noqa: BLE001
-        return None
+        if tag is None or not tag.duration:
+            return None, "音频解析不出时长（直链失效或格式不支持）"
+        return (round(float(tag.duration), 1), size), ""
+    except Exception as e:  # noqa: BLE001
+        return None, _brief(e)
     finally:
         try:
             os.remove(path)
         except OSError:
             pass
-    return None
 
 
 class MusicLib:
-    def __init__(self, cache_path, plugin_data_dir):
+    def __init__(self, cache_path, plugin_data_dir, logger=None):
         self.cache_path = cache_path
         self.plugin_data_dir = plugin_data_dir
+        self.logger = logger or NullLogger()
         self._official = None
         self._user = None
         self._duration = None
@@ -279,13 +296,20 @@ class MusicLib:
         self.last_busy = False
         # 最近一次曲库刷新失败的原因；success 时清空（定时任务日志用）
         self.last_error = ""
+        # 最近一次曲库加载失败的原因（查询路径用；和刷新失败分开记，别互相覆盖）
+        self.last_load_error = ""
+        self._load_errors = {}  # where → 最近一次原因，用来去重
+        self._load_warn_at = {}  # where → 上次告警时间戳
         # 音频全量补全：一次只允许一个批量任务，期间的查询由 service 层拦截
         self._probe_lock = threading.Lock()
         self._probe_stop = False
         self._probe_total = 0
         self._probe_done = 0
         self._probe_failed = 0
+        self._probe_errors = {}  # 失败原因 → 次数，补全日志用
         self._probe_summary = ""
+        # 最近一次音频探测失败的原因（单曲查询和补全都往里写）
+        self.last_probe_error = ""
 
     def load_duration(self):
         """曲目时长表（musicId → 秒），官谱和自制谱合并。"""
@@ -299,7 +323,11 @@ class MusicLib:
             try:
                 with open(_os.path.join(base, name), encoding="utf-8") as f:
                     merged.update(json.load(f))
-            except (OSError, ValueError):
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError) as e:
+                # 文件在但读不出来：以前静默当空表，表现出来只是「时长全没了」
+                self.logger.warning("[dancecube] 时长表读取失败（%s）：%s", name, _brief(e))
                 continue
         self._duration = merged
         return self._duration
@@ -314,12 +342,20 @@ class MusicLib:
         try:
             with open(p, encoding="utf-8") as f:
                 self._size = json.load(f)
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            self._size = {}
+        except (OSError, ValueError) as e:
+            # 同样别静默：损坏时页面会突然全没码率，日志里得留一句话
+            self.logger.warning("[dancecube] 码率表读取失败（music_bitrate.json）：%s", _brief(e))
             self._size = {}
         return self._size
 
     def probe_duration(self, record):
-        """缺时长或码率时现拉音频算一次，并写回缓存。"""
+        """缺时长或码率时现拉音频算一次，并写回缓存。
+
+        探测失败不抛异常（补全要跑几千首，一首炸了不能中断整批），
+        但失败原因一定写进 ``last_probe_error``，由调用方汇总进日志。
+        """
         mid = str(record.get("musicId") or "")
         if not mid:
             return record
@@ -334,21 +370,29 @@ class MusicLib:
                     if int(it.get("FileType") or 0) == 2 and it.get("Url"):
                         url = it["Url"]
                         break
-            except Exception:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
+                self.last_probe_error = "取音频地址失败（%s）" % _brief(e)
+                self.logger.debug("[dancecube] %s 取音频地址失败：%s", mid, _brief(e))
                 return record
         if not url:
+            self.last_probe_error = "接口没给出音频地址"
+            self.logger.debug("[dancecube] %s 接口没给出音频地址", mid)
             return record
-        result = _probe_audio(url)
+        result, reason = _probe_audio(url)
         if not result:
+            self.last_probe_error = reason
+            self.logger.debug("[dancecube] %s 音频探测失败：%s", mid, reason)
             return record
         dur, size = result
         if not dur:
+            self.last_probe_error = "音频解析出 0 秒"
             return record
         record["duration"] = dur
         if size:
             record["size"] = size
             record["kbps"] = round(size * 8 / dur / 1000)
         self._save_probe(mid, dur, size)
+        self.last_probe_error = ""
         return record
 
     def _save_probe(self, mid, dur, size):
@@ -365,9 +409,13 @@ class MusicLib:
                         with open(p, encoding="utf-8") as f:
                             data = json.load(f)
                     data[str(mid)] = value
-                    _atomic_json(p, data)
-                except (OSError, ValueError):
+                    ok = _atomic_json(p, data)
+                except (OSError, ValueError) as e:
+                    self.logger.warning("[dancecube] 探测结果写回失败（%s）：%s", name, _brief(e))
                     continue
+                if not ok:
+                    # 下载成功写盘却失败：内存里补到了时长，重启就没了，最容易漏报
+                    self.logger.warning("[dancecube] 探测结果写盘失败（%s）：%s", name, mid)
         self._duration = None  # 下次重新加载
         self._size = None
 
@@ -383,13 +431,25 @@ class MusicLib:
     def probe_status_text(self):
         if not self._probe_lock.locked():
             return self._probe_summary or "空闲"
-        return "进行中 %d/%d（失败 %d）" % (
+        text = "进行中 %d/%d（失败 %d）" % (
             self._probe_done, self._probe_total, self._probe_failed)
+        if self.last_probe_error:
+            text += "\n最近失败：%s" % self.last_probe_error
+        return text
+
+    def probe_fail_summary(self, limit=3):
+        """失败原因聚合（按次数排序），补全日志用；没有失败时返回空串。"""
+        if not self._probe_errors:
+            return ""
+        top = sorted(self._probe_errors.items(), key=lambda kv: -kv[1])[:limit]
+        return "；".join("%s ×%d" % (k, n) for k, n in top)
 
     def probe_all_missing(self, gap=0.2):
         """批量探测缺时长/码率的自制谱（官谱没有 audioUrl，补不了）。
 
         返回 ``(完成, 失败, 总数)``；已有任务在跑时返回 ``(-1, 0, 0)``。
+        失败按「这首最后没拿到时长」判定——``probe_duration`` 内部吞异常返回
+        原记录，所以不能靠它抛不抛异常来数，以前那样数出来永远是 0。
         """
         if not self._probe_lock.acquire(blocking=False):
             return -1, 0, 0
@@ -408,18 +468,27 @@ class MusicLib:
             self._probe_total = len(targets)
             self._probe_done = 0
             self._probe_failed = 0
+            self._probe_errors = {}
             for r in targets:
                 if self._probe_stop:
                     break
+                self.last_probe_error = ""
                 try:
                     self.probe_duration(r)
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
+                    self.last_probe_error = _brief(e)
+                if not r.get("duration"):
                     self._probe_failed += 1
+                    reason = self.last_probe_error or "未知原因"
+                    self._probe_errors[reason] = self._probe_errors.get(reason, 0) + 1
                 self._probe_done += 1
                 if gap:
                     time.sleep(gap)
             self._probe_summary = "上次：完成 %d/%d，失败 %d" % (
                 self._probe_done, self._probe_total, self._probe_failed)
+            fails = self.probe_fail_summary()
+            if fails:
+                self._probe_summary += "\n失败原因：%s" % fails
             return self._probe_done, self._probe_failed, self._probe_total
         finally:
             self._probe_stop = False
@@ -501,8 +570,8 @@ class MusicLib:
             self.last_error = "官谱数据残缺（%s 条），不覆盖缓存" % got
             return False  # 接口异常返回残缺数据时不要覆盖好缓存
         self._official = [_norm_official(x) for x in songs]
-        _atomic_json(self._official_path(), songs)
-        self.last_error = ""
+        # 写盘失败不影响本次结果（内存已是新数据），但得留痕，否则重启回旧数据没法解释
+        self.last_error = "" if _atomic_json(self._official_path(), songs) else "官谱缓存写入失败"
         return True
 
     def busy(self):
@@ -570,11 +639,20 @@ class MusicLib:
             self.last_error = "自制谱数据残缺（%d 条），不覆盖缓存" % len(items)
             return False  # 翻页异常拿到的残缺数据不要覆盖好缓存
         self._user = items
-        _atomic_json(path, items)
-        self.last_error = ""
+        self.last_error = "" if _atomic_json(path, items) else "自制谱缓存写入失败"
         return True
 
     # ---------------------------------------------------------- 检索
+    def _note_load_error(self, where, exc):
+        """曲库加载失败留痕：同一处同一原因 5 分钟内只告警一次，免得查询刷屏。"""
+        msg = _brief(exc)
+        self.last_load_error = msg
+        now = time.time()
+        if self._load_errors.get(where) != msg or now - self._load_warn_at.get(where, 0) > 300:
+            self._load_errors[where] = msg
+            self._load_warn_at[where] = now
+            self.logger.warning("[dancecube] %s失败：%s", where, msg)
+
     def _search(self, records, keyword):
         low = _norm_text(keyword)
         exact, prefix, contains = [], [], []
@@ -600,7 +678,10 @@ class MusicLib:
             for loader in (self.load_official, self.load_user):
                 try:
                     hits = [r for r in loader() if int(r.get("musicId") or 0) == mid]
-                except Exception:  # noqa: BLE001
+                except LibraryBusy:
+                    hits = []
+                except Exception as e:  # noqa: BLE001
+                    self._note_load_error("按 ID 查曲库", e)
                     hits = []
                 if hits:
                     self.last_raw_total = len(hits)
@@ -611,15 +692,15 @@ class MusicLib:
             out.extend(self._search(self.load_official(), text))
         except LibraryBusy:
             self.last_busy = True
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            self._note_load_error("搜索官谱", e)
         try:
             # 官谱和自制谱都查：同名时两条都返回，让用户自己挑
             out.extend(self._search(self.load_user(), text))
         except LibraryBusy:
             self.last_busy = True
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            self._note_load_error("搜索自制谱", e)
         self.last_raw_total = len(out)
         # 总数超过 10 才去重：同名同来源只保留点赞最高的一条
         if len(out) > 10:
@@ -643,7 +724,10 @@ class MusicLib:
         for loader in (self.load_official, self.load_user):
             try:
                 records = loader()
-            except Exception:  # noqa: BLE001
+            except LibraryBusy:
+                continue
+            except Exception as e:  # noqa: BLE001
+                self._note_load_error("匹配问题里的曲名", e)
                 continue
             best = None
             for r in records:
@@ -660,7 +744,10 @@ class MusicLib:
                     for r in loader():
                         if int(r.get("musicId") or 0) == mid:
                             return self._attach_duration([self.enrich_user(r)])[0]
-                except Exception:  # noqa: BLE001
+                except LibraryBusy:
+                    continue
+                except Exception as e:  # noqa: BLE001
+                    self._note_load_error("匹配问题里的曲 ID", e)
                     continue
         return None
 
@@ -676,7 +763,9 @@ class MusicLib:
             return record
         try:
             d = self._fetch("/Dance/api/MusicData/GetGoodsInfo", {"musicId": mid})
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            # show+ 是可选补充，失败就退回列表里的经典三档；记 debug 便于发现接口整体挂了
+            self.logger.debug("[dancecube] %s 补 show+ 谱面失败：%s", mid, _brief(e))
             return record
         if not isinstance(d, dict):  # 接口异常时可能返回 list，别 .get 崩掉这次查询
             return record

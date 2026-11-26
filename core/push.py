@@ -8,12 +8,15 @@ import json
 import time
 from pathlib import Path
 
+from . import NullLogger
+
 
 class PushStore:
     """订阅目标与待推送变更的持久化（原子写）。"""
 
-    def __init__(self, path):
+    def __init__(self, path, logger=None):
         self.path = Path(path)
+        self.logger = logger or NullLogger()
 
     # ---------------------------------------------------------- 读写
     def _load(self):
@@ -21,7 +24,12 @@ class PushStore:
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
             return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as e:
+            # 读坏了会按空表继续走，之后的 _save 可能把订阅和待推送整个覆盖掉——
+            # 这种「静默丢数据」必须在日志里留一句
+            self.logger.warning("[dancecube] 推送状态读取失败（%s）：%s", self.path.name, e)
             return {}
 
     def _save(self, data):
