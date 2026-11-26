@@ -62,17 +62,26 @@
 接入其他框架只需要写一层翻译：
 
 1. 构造 `DanceCubeService(config, data_dir, bundled_data_dir, notifier, logger)`；
-2. 把消息整理成 `RequestContext(user_id, group_id, is_group, platform, text, origin)`；
+2. 把消息整理成 `RequestContext(user_id, group_id, is_group, platform, text, origin, raw)`；
+   `raw` 传框架的原始 event（可选，不传就是 `None`）。core 只把它原样透传给 notifier、不读任何属性，
+   因此不破坏框架无关；QQ 官方通道要靠它才有被动回复能力（见第 4 步）；
 3. `async for reply in service.song(ctx): ...`，把 `Text` / `Image` / `File` 自己发出去；
-4. 登录完成后的通知走 `notifier(ctx, replies)`（没有就只记日志）。
+4. 登录完成后的通知走 `notifier(ctx, replies)`（没有就只记日志）。notifier 里能拿到 `ctx.raw` 时
+   优先用它回包（被动回复，走原消息的上行额度），拿不到再按会话标识主动发送——
+   QQ 官方通道在群聊里对主动消息限制很严，轮询几十秒后补发会被判「无权限」；
+5. `origin` 是会话标识，格式建议 `平台实例:消息类型:会话`（AstrBot 的 UMO 就是这个形状）。
+   它同时被 `bound_platform` / `per_platform` 用来判断「这条消息属于哪个机器人实例」，
+   自定义格式时保持前缀稳定即可。
 
 `examples/nonebot2_adapter.py` 是 NoneBot2（OneBot v11）的完整示例。
 Koishi / Yunzai 这类非 Python 框架，建议把 core 包一层 FastAPI 当 HTTP 服务调，而不是重写。
 
-两个要注意的差异：
+三个要注意的差异：
 
 - 群标识：`qq_official` 是 `group_openid`，OneBot 是数字群号，`allowed_groups` 要按平台填；
-- 发文件：OneBot 有 `upload_group_file`（真群文件），官方 API 只有聊天富媒体。
+- 发文件：OneBot 有 `upload_group_file`（真群文件），官方 API 只有聊天富媒体；
+- 多机器人：一个进程跑多个机器人账号时，用 `bound_platform`（只在一个实例响应）或
+  `per_platform`（按实例分别配群白名单、主人等）隔离，否则同一指令会在所有账号上同时应答。
 
 ## 注意事项
 

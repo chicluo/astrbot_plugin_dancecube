@@ -97,6 +97,50 @@ def safe_id(value) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", str(value or "user"))
 
 
+class _MergedConfig:
+    """只读配置视图：底层默认配置 + 按会话覆盖的少量键。
+
+    只实现 .get()，够 service 层用；不继承框架的 AstrBotConfig，
+    这样 core/ 依然不依赖 AstrBot（换框架时这段照用）。
+    """
+
+    __slots__ = ("_base", "_override")
+
+    def __init__(self, base, override):
+        self._base = base
+        self._override = override
+
+    def get(self, key, default=None):
+        if key in self._override:
+            value = self._override[key]
+            return default if value is None else value
+        try:
+            return self._base.get(key, default)
+        except AttributeError:
+            return default
+
+    def __getitem__(self, key):
+        value = self.get(key, _MISSING)
+        if value is _MISSING:
+            raise KeyError(key)
+        return value
+
+    def __contains__(self, key):
+        return key in self._override or key in self._base
+
+    def keys(self):
+        out = set()
+        try:
+            out.update(self._base.keys())
+        except (AttributeError, TypeError):
+            pass
+        out.update(self._override.keys())
+        return out
+
+
+_MISSING = object()
+
+
 def _harden_nt(path, is_dir):
     """Windows 上 os.chmod 不映射到 NTFS ACL，改用 icacls 收紧到当前用户 + SYSTEM + Administrators。"""
     try:
@@ -178,6 +222,44 @@ class DanceCubeService:
         self._check_config()
 
     # ------------------------------------------------------------ 配置
+    def _cfg(self, ctx=None):
+        """按会话取配置：命中 ``per_platform`` 里的规则就用那一份，否则用默认。
+
+        用途是多机器人分工——例如 A 机器人只服务某些群、B 机器人放开全部。
+        规则写在插件配置的 ``per_platform`` 里，形如::
+
+            {"per_platform": [
+                {"prefix": "default_<实例id甲>", "config": {"allowed_groups": ["*"]}},
+                {"prefix": "default_<实例id乙>", "config": {"allowed_groups": ["C0A..."]}}
+            ]}
+
+        ``prefix`` 匹配会话标识（``platform:type:session``）的开头，从上往下
+        第一个命中的生效；``config`` 里的键覆盖默认值，没写的键沿用默认。
+        """
+        if ctx is None:
+            return self.config
+        origin = getattr(ctx, "origin", "") or ""
+        if not origin:
+            return self.config
+        try:
+            rules = self.config.get("per_platform") or []
+        except AttributeError:
+            return self.config
+        if not isinstance(rules, list):
+            return self.config
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            prefix = str(rule.get("prefix") or "").strip()
+            if not prefix or not origin.startswith(prefix):
+                continue
+            override = rule.get("config")
+            if not isinstance(override, dict):
+                return self.config
+            # 浅合并不是 ConfigView：调用方只用 .get()，这里返回包装对象即可
+            return _MergedConfig(self.config, override)
+        return self.config
+
     def _check_config(self):
         groups = [str(g).strip() for g in (self.config.get("allowed_groups") or [])]
         if "*" in groups:
@@ -214,7 +296,7 @@ class DanceCubeService:
         冒号前就是平台实例 id。多个机器人共用插件时靠它隔离，
         否则同一个指令会在所有机器人上同时应答。
         """
-        bound = str(self.config.get("bound_platform") or "").strip()
+        bound = str(self._cfg(ctx).get("bound_platform") or "").strip()
         if not bound:
             return True
         return (ctx.origin or "").startswith(bound + ":")
@@ -222,14 +304,15 @@ class DanceCubeService:
     def allowed(self, ctx: RequestContext) -> bool:
         if not self._platform_ok(ctx):
             return False
-        owner = str(self.config.get("owner_qq") or "").strip()
+        cfg = self._cfg(ctx)
+        owner = str(cfg.get("owner_qq") or "").strip()
         if owner and ctx.user_id == owner:
             return True  # 机器人主人不受群白名单限制
         if not ctx.is_group:
-            return as_bool(self.config.get("allow_private"), True)
+            return as_bool(cfg.get("allow_private"), True)
         groups = {
             str(g).strip()
-            for g in (self.config.get("allowed_groups") or [])
+            for g in (cfg.get("allowed_groups") or [])
             if str(g).strip()
         }
         if "*" in groups:
@@ -290,9 +373,9 @@ class DanceCubeService:
             except OSError:
                 pass
 
-    def _cooldown_wait(self, uid: str, seconds: int = 30, kind: str = "query") -> int:
+    def _cooldown_wait(self, uid: str, seconds: int = 30, kind: str = "query", cfg=None) -> int:
         # 主人不设冷却（测试时不想等）
-        owner = str(self.config.get("owner_qq") or "").strip()
+        owner = str((cfg or self.config).get("owner_qq") or "").strip()
         if owner and uid == owner:
             return 0
         key = "%s:%s" % (kind, uid)
@@ -305,7 +388,7 @@ class DanceCubeService:
 
     # ------------------------------------------------------------ 公共查询
     async def _player(self, ctx: RequestContext):
-        wait = self._cooldown_wait(ctx.user_id)
+        wait = self._cooldown_wait(ctx.user_id, cfg=self._cfg(ctx))
         if wait:
             return None, "操作太频繁，请 %d 秒后再试。" % wait
         tok = self.load_token(ctx.user_id)
@@ -379,8 +462,9 @@ class DanceCubeService:
         if not self.allowed(ctx):
             return
         uid = ctx.user_id
-        if as_bool(self.config.get("login_admin_only"), False):
-            owner = str(self.config.get("owner_qq") or "").strip()
+        cfg = self._cfg(ctx)
+        if as_bool(cfg.get("login_admin_only"), False):
+            owner = str(cfg.get("owner_qq") or "").strip()
             if not owner:
                 yield Text(
                     "管理员开了「仅管理员可登录」却没配 owner_qq，现在谁都登不了；请联系管理员补配置。"
@@ -389,7 +473,7 @@ class DanceCubeService:
             if uid != owner:
                 yield Text("管理员开启了「仅管理员可登录」，请联系管理员。")
                 return
-        wait = self._cooldown_wait(uid, seconds=10, kind="login")
+        wait = self._cooldown_wait(uid, seconds=10, kind="login", cfg=cfg)
         if wait:
             yield Text("登录操作太频繁，请 %d 秒后再试。" % wait)
             return
@@ -408,7 +492,7 @@ class DanceCubeService:
         self._clean_tmp()
         qr_path = self._tmp_path("qr", uid)
         qr_path.write_bytes(png)
-        timeout = int(self.config.get("qr_timeout_seconds", 120) or 120)
+        timeout = int(cfg.get("qr_timeout_seconds", 120) or 120)
 
         # 先挂轮询任务，再发二维码：消费方提前结束迭代也不影响登录
         self._pending[uid] = asyncio.create_task(
@@ -566,9 +650,9 @@ class DanceCubeService:
             pass
         return d
 
-    def _catalog_ttl(self) -> int:
+    def _catalog_ttl(self, cfg=None) -> int:
         try:
-            minutes = int(self.config.get("catalog_ttl_minutes", 30) or 30)
+            minutes = int((cfg or self.config).get("catalog_ttl_minutes", 30) or 30)
         except (TypeError, ValueError):
             minutes = 30
         return max(1, minutes) * 60
@@ -646,10 +730,10 @@ class DanceCubeService:
         yield File(str(path), Path(path).name, )
 
     # ------------------------------------------------------------ 谱面推送
-    def _export_dir(self) -> str:
+    def _export_dir(self, cfg=None) -> str:
         """导出目录固定在插件数据目录内；配置的路径越界时忽略。"""
         base = self.data_dir.resolve()
-        raw = str(self.config.get("export_dir") or "").strip()
+        raw = str((cfg or self.config).get("export_dir") or "").strip()
         if raw:
             try:
                 p = Path(raw).expanduser().resolve()
@@ -666,7 +750,7 @@ class DanceCubeService:
         return str(out)
 
     def _is_owner(self, ctx: RequestContext) -> bool:
-        owner = str(self.config.get("owner_qq") or "").strip()
+        owner = str(self._cfg(ctx).get("owner_qq") or "").strip()
         return bool(owner) and ctx.user_id == owner
 
     async def backfill(self, ctx: RequestContext, arg: str = ""):

@@ -1,9 +1,15 @@
 {
+  "per_platform": {
+    "description": "按机器人实例分别配置（多账号服务不同群时用）",
+    "type": "list",
+    "default": [],
+    "hint": "每条规则形如 {prefix: default_<实例id>, config: {允许覆盖的键}}。从上往下第一个 prefix 匹配会话标识的开头就生效，未写的键沿用上面的默认值。可覆盖 allowed_groups / allow_private / owner_qq / bound_platform / login_admin_only / qr_timeout_seconds / catalog_ttl_minutes / export_dir。留空则所有实例共用一套配置。"
+  },
   "bound_platform": {
     "description": "只在这个机器人实例上响应（留空=全部）",
     "type": "string",
     "default": "",
-    "hint": "多机器人共用一套插件时用它隔离，例如填 default_<实例id>，则只有该实例收到舞立方指令。填的是平台实例 id（AstrBot 后台「机器人」列表里那一串），不是 appid。"
+    "hint": "多机器人共用一套插件时用它隔离，例如填 default_<实例id>，则只有该实例收到舞立方指令。填的是平台实例 id（AstrBot 后台「机器人」列表里那一串），不是 appid。如果已经用 per_platform 按实例配置，这里留空即可。"
   },
   "owner_qq": {
     "description": "机器人主人 QQ",
