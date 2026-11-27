@@ -872,35 +872,44 @@ class DanceCubeService:
         self._sched_task = loop.create_task(self._scheduler_loop())
         self.logger.info("[dancecube] 曲库定时刷新已启动（每天 03:00-05:00 随机时刻）")
 
-    def _next_refresh_delay(self) -> float:
-        """距离下一次 03:00-05:00 随机时刻的秒数。"""
-        now = datetime.now()
-        base = now.replace(hour=3, minute=0, second=0, microsecond=0)
-        target = base + timedelta(minutes=random.randint(0, 120))
-        if target <= now:
-            target = base + timedelta(days=1) + timedelta(minutes=random.randint(0, 120))
-        return max(60.0, (target - now).total_seconds())
-
-    def _seconds_until_push(self) -> float:
-        """距离下一个 08:00 推送点的秒数。"""
-        now = datetime.now()
-        target = now.replace(hour=8, minute=0, second=0, microsecond=0)
-        if target <= now:
-            target += timedelta(days=1)
-        return max(30.0, (target - now).total_seconds())
-
     async def _scheduler_loop(self):
+        """每分钟醒一次，按「今天做过没有」决定要不要刷新/推送。
+
+        不能用「睡到 03:xx → 刷新 → 再睡到 08:00」这种一次性的长 sleep：
+        中间只要重启一次，长 sleep 就被 CancelledError 掐断，当天的推送会整段丢掉
+        （2026-11-27 就是重启了三次，08:00 没推）。进度落在 push_targets.json 里，
+        重启后能接着做。
+        """
+        # 随机时刻落在 03:00-05:00，每天固定一次；重启后当天已经刷过就不再刷
+        refresh_at = None
         while True:
             try:
-                await asyncio.sleep(self._next_refresh_delay())
-                await self._refresh_libraries()  # 只检测，把变更写进 pending
-                await asyncio.sleep(self._seconds_until_push())  # 等早八
-                await self._push_pending()  # 统一推给已开启的会话
+                now = datetime.now()
+                today = now.strftime("%Y-%m-%d")
+                prog = self._push.get_progress()
+
+                # 1) 今天该刷新了吗
+                if refresh_at is None or refresh_at.date() != now.date():
+                    base = now.replace(hour=3, minute=0, second=0, microsecond=0)
+                    refresh_at = base + timedelta(minutes=random.randint(0, 120))
+                    if refresh_at <= now and prog["refreshed"] != today:
+                        # 已经过了随机时刻，但今天还没刷 → 立刻补
+                        refresh_at = now
+                if prog["refreshed"] != today and now >= refresh_at:
+                    await self._refresh_libraries()
+                    self._push.set_progress("refreshed", today)
+
+                # 2) 今天该推送了吗
+                if prog["pushed"] != today and now.hour >= 8:
+                    await self._push_pending()
+                    # 有没有内容都要记进度，否则整天每分钟都会重试
+                    self._push.set_progress("pushed", today)
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
                 self.logger.warning("[dancecube] 定时任务异常：%s", e)
-                await asyncio.sleep(600)
+
+            await asyncio.sleep(60)
 
     async def _refresh_libraries(self):
         """官谱先刷、再刷自制谱；刷新前后各拍一次快照，差异记入 pending。"""
@@ -991,11 +1000,20 @@ class DanceCubeService:
         if not self.notifier:
             self.logger.warning("[dancecube] 没有配置 notifier，曲库更新无法推送")
             return
+        # 先看有没有内容，别白跑一趟 take_pending（它会把 pending 清掉）
+        pending = self._push.peek_pending()
+        if not pending:
+            return
+        targets = self._push.enabled_targets()
+        if not targets:
+            # 没人订阅：不清 pending，等有人开了再推
+            self.logger.info("[dancecube] 有曲库变更但没有已开启的会话，暂不推送")
+            return
+
         pending = self._push.take_pending()
         if not pending:
             return
         text = self._format_changes(pending)
-        targets = self._push.enabled_targets()
         failed = 0
         for t in targets:
             umo = str(t.get("umo") or "").strip()
@@ -1006,7 +1024,7 @@ class DanceCubeService:
             except Exception as e:  # noqa: BLE001
                 failed += 1
                 self.logger.warning("[dancecube] 推送失败（%s）：%s", umo, e)
-        if targets and failed == len(targets):
+        if failed == len(targets):
             # 全部失败：保留变更，下次早八再试，避免一口气全丢
             self._push.save_pending(pending)
             self.logger.warning("[dancecube] 全部推送失败，变更保留到下次")

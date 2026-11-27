@@ -82,6 +82,12 @@ class PushStore:
         data["pending"] = pending
         self._save(data)
 
+    def peek_pending(self):
+        """只看不删：有没有待推送内容。用于决定要不要调 take_pending。"""
+        pending = self._load().get("pending") or {}
+        keys = ("official_new", "official_gone", "user_new", "user_gone")
+        return pending if any(pending.get(k) for k in keys) else {}
+
     def take_pending(self):
         """取出并清空 pending；没有变化时返回空 dict。"""
         data = self._load()
@@ -91,3 +97,27 @@ class PushStore:
         data["pending"] = {}
         self._save(data)
         return pending
+
+    # ---------------------------------------------------------- 每日进度
+    def get_progress(self):
+        """取「最后一次刷新/推送的日期」，用于重启后判断今天还要不要做。
+
+        没有这两个日期时，重启会让调度从头睡到下一个 03:xx，当天的 08:00 推送
+        就被整段跳过——所以进度必须落盘，不能只放内存。
+        """
+        data = self._load()
+        prog = data.get("progress") or {}
+        return {
+            "refreshed": str(prog.get("refreshed") or ""),
+            "pushed": str(prog.get("pushed") or ""),
+        }
+
+    def set_progress(self, key, date):
+        """记录某天已完成的动作。key 只能是 refreshed / pushed。"""
+        if key not in ("refreshed", "pushed"):
+            return
+        data = self._load()
+        prog = data.get("progress") or {}
+        prog[key] = str(date)
+        data["progress"] = prog
+        self._save(data)
